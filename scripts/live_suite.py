@@ -594,6 +594,116 @@ HOLDOUT = {
         "On Wikipedia, find the year the Golden Gate Bridge opened.",
         answer_matches(r"1937"),
     ),
+    # A second batch, also written before it was ever run.
+    "everest_height": (None, "How tall is Mount Everest according to Wikipedia?", answer_matches(r"8,?84[89]")),
+    "pride_author": (None, "According to Wikipedia, who wrote Pride and Prejudice?", answer_matches(r"austen")),
+    "gold_symbol": (None, "What is the chemical symbol for gold according to Wikipedia?", answer_matches(r"\bAu\b")),
+    "python_article": (
+        None,
+        "Open the Wikipedia article about the Python programming language.",
+        url_has("wikipedia.org/wiki/python_(programming_language)"),
+    ),
+    "mdn_promise_all": (
+        None,
+        "Find the MDN reference page for JavaScript's Promise.all.",
+        url_has("developer.mozilla.org", "promise/all"),
+    ),
+    "pathlib_docs": (
+        None,
+        "Find the Python documentation page for the pathlib module.",
+        url_has("docs.python.org", "pathlib"),
+    ),
+    "lodash_version": (
+        None,
+        "What is the latest version of lodash on npm?",
+        both(url_has("npmjs.com/package/lodash"), answer_matches(r"\d+\.\d+\.\d+")),
+    ),
+    "numpy_version": (None, "What is the latest version of numpy on PyPI?", answer_matches(r"\d+\.\d+")),
+    "flask_pypi": (None, "Open the PyPI project page for flask.", url_has("pypi.org/project/flask")),
+    "velvet_price": (
+        "https://books.toscrape.com",
+        "What does the book Tipping the Velvet cost?",
+        answer_matches(r"53\.74"),
+    ),
+    "mystery_count": (
+        "https://books.toscrape.com",
+        "How many books are in the Mystery category?",
+        answer_matches(r"\b32\b"),
+    ),
+    "twain_quote": (
+        "https://quotes.toscrape.com",
+        "Find a quote by Mark Twain and tell me what it says.",
+        answer_matches(r"twain"),
+    ),
+    "add_elements": (
+        "https://the-internet.herokuapp.com/add_remove_elements/",
+        "Add three elements.",
+        lambda r: r["controls"].count("Delete") >= 3,
+    ),
+    "number_input": (
+        "https://the-internet.herokuapp.com/inputs",
+        "Enter 42 in the number field.",
+        lambda r: "42" in r["values"],
+    ),
+    "tab_key": ("https://the-internet.herokuapp.com/key_presses", "Press the Tab key.", has("you entered: tab")),
+    "first_hover": (
+        "https://the-internet.herokuapp.com/hovers",
+        "Hover over the first avatar and tell me the user's name.",
+        answer_matches(r"user1"),
+    ),
+    "status_404": (
+        "https://the-internet.herokuapp.com/status_codes",
+        "Open the 404 status code page and tell me what it says.",
+        both(url_has("status_codes/404"), answer_matches(r"404")),
+    ),
+    "my_ip": ("https://httpbin.org", "Open the page that shows my IP address.", url_has("httpbin.org/ip")),
+    "hn_past": (
+        "https://news.ycombinator.com",
+        "Open the past front pages section of Hacker News.",
+        url_has("news.ycombinator.com/front"),
+    ),
+    "attention_title": (
+        None,
+        "Open the arXiv abstract page for paper 1706.03762 and tell me its title.",
+        both(url_has("arxiv.org/abs/1706.03762"), answer_matches(r"attention is all you need")),
+    ),
+    "eiffel_city": (
+        "https://www.openstreetmap.org",
+        "Search for the Eiffel Tower and tell me which city it is in.",
+        answer_matches(r"paris"),
+    ),
+    "passport_fee": (
+        None,
+        "On GOV.UK, find how much it costs to renew an adult passport online.",
+        both(url_has("gov.uk"), answer_matches(r"£\s?\d+")),
+    ),
+    "nhs_chickenpox": (None, "Open the NHS page about chickenpox.", url_has("nhs.uk/conditions/chickenpox")),
+    "bengaluru_weather": (None, "What is the weather in Bengaluru right now?", answer_matches(r"°|degree")),
+    "new_york_time": (
+        None,
+        "What time is it now in New York according to timeanddate.com?",
+        answer_matches(r"\d{1,2}:\d{2}"),
+    ),
+    "tallest_building": (
+        None,
+        "According to Wikipedia's list of tallest buildings, what is the tallest building in the world?",
+        answer_matches(r"burj khalifa"),
+    ),
+    "galaxy_cart": (
+        "https://www.demoblaze.com",
+        "Add the Samsung galaxy s6 to the cart, then open the cart.",
+        both(url_has("cart.html"), has("samsung galaxy s6")),
+    ),
+    "saucedemo_sort": (
+        "https://www.saucedemo.com",
+        "Log in as standard_user with password secret_sauce and sort the products by price from low to high.",
+        lambda r: "lohi" in r["values"],
+    ),
+    "autocomplete_java": (
+        "https://jqueryui.com/autocomplete/",
+        "In the demo, type Ja into the field and pick Java from the suggestions.",
+        lambda r: "Java" in r["values"].split(" | "),
+    ),
 }
 
 
