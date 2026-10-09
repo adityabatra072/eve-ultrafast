@@ -140,7 +140,7 @@ uv run python scripts/live_suite.py -n 3     # 83 tasks on public sites, 3 runs 
 uv run python scripts/live_suite.py --holdout  # 68 tasks never used for tuning
 ```
 
-Pass task names to run a few, for example `scripts/live_suite.py amazon_sort booking_goa`. Results and traces land in `artifacts/live-suite/`; the latest numbers are in [results.md](results.md).
+Pass task names to run a few, for example `scripts/live_suite.py amazon_sort booking_goa`. Results and traces land in `artifacts/live-suite/`; the latest numbers are in [results.md](results.md), and what is still wrong is in [known-issues.md](known-issues.md).
 
 ## When something goes wrong
 

@@ -10,7 +10,7 @@ Give it one goal, with or without a start page. EVE picks an operation and an el
 
 <img src="docs/inspector.png" alt="The inspector on Google Flights: numbered elements on the live page, EVE's operation probabilities, and its ranking of the autocomplete suggestions" width="100%" />
 
-[Usage](docs/usage.md) · [How it was tested](docs/results.md) · [What people use browser agents for](docs/use-cases.md) · [Design notes](docs/design.md) · [Read the loop](eve_ultrafast/agent.py)
+[Usage](docs/usage.md) · [How it was tested](docs/results.md) · [Known issues](docs/known-issues.md) · [What people use browser agents for](docs/use-cases.md) · [Design notes](docs/design.md) · [Read the loop](eve_ultrafast/agent.py)
 
 ## The action space
 
