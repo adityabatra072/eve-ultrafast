@@ -84,6 +84,22 @@ def verification_wall(page):
     return None
 
 
+SITE_ERRORS = (
+    "something went wrong", "application error", "502 bad gateway", "503 service unavailable",
+    "504 gateway time-out", "504 gateway timeout", "too many requests", "rate exceeded",
+    "internal server error", "this page isn't working", "no results returned. oops",
+)
+
+
+def site_error(page):
+    """The site answered with an error page instead of content. None otherwise."""
+    body = page.get("text") or ""
+    if len(body) > 2500:
+        return None  # error pages are short; a long page that mentions "something went wrong" is content
+    text = ((page.get("title") or "") + " " + body).lower()
+    return next((phrase for phrase in SITE_ERRORS if phrase in text), None)
+
+
 def pending_dialog():
     """An open alert, confirm or prompt. While one is open the page answers nothing else."""
     try:

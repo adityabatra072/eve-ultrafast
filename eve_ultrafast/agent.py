@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from . import canvas
-from .browser import KEYS, Browser, StalePage, Unavailable, verification_wall
+from .browser import KEYS, Browser, StalePage, Unavailable, site_error, verification_wall
 from .model import (
     SYNTHETIC,
     action_space,
@@ -109,6 +109,16 @@ class Agent:
                 raise ValueError("This run has stopped. Start a fresh demo.")
             if len(state["decisions"]) >= MAX_STEPS * 2:
                 return self.finish("blocked", state["page"], "Reached the model-call budget")
+            # A site that keeps answering with an error page gets three tries, not the whole action budget.
+            if site_error(state["page"]):
+                stuck = 0
+                for h in reversed(state["history"]):
+                    if not h.get("site_error"):
+                        break
+                    stuck += 1
+                if stuck >= 3:
+                    reason = f"The site kept failing ({site_error(state['page'])})"
+                    return self.finish("blocked", state["page"], reason)
             wall = verification_wall(state["page"])
             if wall:
                 # Never solved by the agent: wait for it to clear on its own, then for a person if one can see it.
@@ -219,6 +229,7 @@ class Agent:
             state["page"] = state["browser"].observe(screenshot=self.screenshots)
             state["elapsed_ms"] = round((time.perf_counter() - state["started_at"]) * 1000)
             state["history"][-1].update(
+                site_error=bool(site_error(state["page"])),
                 page_changed=state["page"]["fingerprint"] != page["fingerprint"],
                 url=state["page"]["url"],
                 elapsed_ms=state["elapsed_ms"],

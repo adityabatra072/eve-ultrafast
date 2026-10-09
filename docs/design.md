@@ -63,6 +63,7 @@ Live runs on public sites turned up a handful of patterns the original fixtures 
 - A click on a real link waits for the page it opens (up to 15 seconds on slow servers) instead of reading the old page again.
 - When EVE cannot find the page a goal needs, it can NAVIGATE, and the text helper may write a DuckDuckGo search limited to the named site. Qatar Airways' baggage allowance went from unreachable to two actions this way.
 - A NAVIGATE that lands on a 404 sends EVE back to the site's home page.
+- A site that keeps answering with a short error page ("something went wrong", a gateway 5xx, "too many requests") gets three tries, then the run stops with that reason. Google Flights' recurring results error used to eat the whole 60-action budget; it now ends after about a dozen actions.
 - Password inputs are offered for typing. The snapshot reports only `filled` or empty and never reads a password back off the page. A password you put in the goal still shows up where the agent typed it: the trace and the decision trail.
 
 ## Fitting EVE's limits

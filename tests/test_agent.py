@@ -944,3 +944,26 @@ def test_an_invalid_cell_is_refused(monkeypatch):
     monkeypatch.setattr(model, "post_json", Mock(return_value=reply))
     with pytest.raises(ValueError, match="no valid cell"):
         model.canvas_cell("Click green", [], "img", ["A1", "B1"], 1)
+
+
+
+def test_a_site_that_keeps_failing_stops_after_three_tries(runner, monkeypatch):
+    broken = {**runner.state["page"], "text": "No results returned. Oops, something went wrong. Reload"}
+    runner.state["page"] = broken
+    runner.state["history"] = [
+        {"kind": "click", "action": "Reload", "url": "u", "site_error": True, "page_changed": True} for _ in range(3)
+    ]
+    monkeypatch.setattr(loop, "final_answer", Mock(return_value=({"answer": "Site broken", "complete": False}, {})))
+    runner.state["status"] = "ready"
+    runner.rechecks = 2
+    runner.command("predict", {})
+    assert runner.state["status"] == "blocked" and "kept failing" in runner.state["stop_reason"]
+
+
+def test_ordinary_pages_are_not_site_errors():
+    from eve_ultrafast.browser import site_error
+
+    assert site_error({"title": "Shop", "text": "Add to cart"}) is None
+    article = "Something went wrong in our deploy. " + "Details of the incident and the fix. " * 100
+    assert site_error({"title": "Postmortem", "text": article}) is None
+    assert site_error({"title": "504 Gateway Time-out", "text": ""}) == "504 gateway time-out"
