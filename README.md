@@ -10,7 +10,7 @@ Give it one goal, with or without a start page. EVE picks an operation and an el
 
 <img src="docs/inspector.png" alt="The inspector on Google Flights: numbered elements on the live page, EVE's operation probabilities, and its ranking of the autocomplete suggestions" width="100%" />
 
-[How it was tested](docs/results.md) · [What people use browser agents for](docs/use-cases.md) · [Design notes](docs/design.md) · [Read the loop](eve_ultrafast/agent.py)
+[Usage](docs/usage.md) · [How it was tested](docs/results.md) · [What people use browser agents for](docs/use-cases.md) · [Design notes](docs/design.md) · [Read the loop](eve_ultrafast/agent.py)
 
 ## The action space
 
@@ -68,6 +68,8 @@ uv run eve
 ```
 
 The agent reads the key `wally account login` saved. To use a key directly, `cp .env.example .env` and set `RUNANYWHERE_API_KEY`.
+
+The [usage guide](docs/usage.md) covers settings, goals, files and troubleshooting.
 
 Open **http://127.0.0.1:8766** and click **Start demo → Run automatically**. The inspector shows numbered elements, operation probabilities, target probabilities, and executed actions. **Choose next** pauses before execution. Pick **Any website** to give it your own goal, with an optional start URL. Leave the URL empty and EVE opens the right site itself.
 
