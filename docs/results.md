@@ -1,38 +1,34 @@
 # How it was tested
 
-Model: `eve` on Wally through `POST /v1/systemone`. Text helper: `deepseek-v4.1-flash` on Wally at its default settings. Every run starts from a fresh tab in a dedicated Chrome profile and gets one natural-language goal. A script checks the final page on its own; the model's `DONE` counts for nothing.
+Decisions: `eve` on Wally through `POST /v1/systemone`. Text, addresses and answers: `deepseek-v4.1-flash` on Wally at its default settings. Every run gets one natural-language goal in a fresh tab of a dedicated Chrome profile. The suite clears the start site's storage and cookies first, so a remembered login or to-do list can't decide the result. A check on the final URL, page text or answer decides pass or fail; the model's own `DONE` counts for nothing.
 
-| Task | Start page | Passed | Actions | EVE requests |
-| --- | --- | --- | --- | --- |
-| Hotel search with two filters, then open one stay | local fixture | 3/3 | 5 | 6 |
-| Open one article from a list | local fixture | 3/3 | 1 | 2 |
-| Search Wikipedia and open an article | en.wikipedia.org | 3/3 | 2 | 5 to 6 |
-| Open the first story's comments | news.ycombinator.com | 3/3 | 1 | 3 |
-| One-way Zürich → London, one adult, economy | google.com/travel/flights | 8/12 | 10 to 16 | 16 to 26 |
+## Live suite
 
-Starting from a blank tab, with no start page, EVE has to pick `NAVIGATE` and the text helper writes the address:
+`uv run python scripts/live_suite.py` runs 33 tasks on public websites. The task list follows what the WebVoyager and Online-Mind2Web benchmarks cover: shopping, search, navigation, form filling, travel lookup and information retrieval. The last full run passed 33/33.
 
-| Goal | Passed | What happened |
+| Kind | Tasks | What the check looks at |
 | --- | --- | --- |
-| Go to Hacker News and open the comments of the top story | 2/2 | opened news.ycombinator.com, clicked the first story's comments |
-| Go to Wikipedia and open the article about the Eiffel Tower | 2/2 | opened the article's address directly |
-| Open the GitHub repository browser-use/browser-use | 2/2 | opened the repository's address directly |
-| Go to python.org and open the Downloads page | 2/2 | opened python.org/downloads directly |
+| Shopping | best mouse under ₹5,000 on Amazon India (from a blank tab); sort USB-C cables by price; MacBook Air price on Apple India; MacBook Air and iPad Air prices together | Amazon product or sorted URL; prices in the answer, two of them for the comparison |
+| Search engines | Google search to runwally.com; DuckDuckGo search to a GitHub repo | final URL |
+| Reference | Eiffel Tower height; Inception's director and his birth date; India's population from a long table; meaning of serendipity; react's version on npm; a model's license on Hugging Face; weather in Gurugram | facts in the answer (330 m, 1970, a population figure, a definition, a version number, Apache, a temperature) |
+| Docs | Python's json module; MDN's Array.prototype.map | final URL |
+| GitHub | star count; Issues tab; repo search | URL plus a number for stars |
+| News and lists | BBC top story; HN newest story's comments; HN story ranked 20; arXiv search; Allrecipes recipe rated 4.5+; Books to Scrape page 2 and cheapest poetry book | article or item URL; title or price in the answer |
+| Video | YouTube search, open the first video | watch URL |
+| Forms | httpbin pizza order (radio, checkboxes, textarea); Selenium web form (password, dropdown); quotes login; react-select custom dropdown | the submitted values echoed back, "Received!", Logout link, selected option |
+| Apps | TodoMVC: add three to-dos, complete one | "2 items left" with all three listed |
+| Travel | Google Flights one-way Zürich → London | results URL and flight results on the page |
 
-After `NAVIGATE` was added, the earlier tasks were run again to check EVE doesn't reach for it when the current site will do: hotel 3/3, reading room 3/3, Wikipedia 3/3, Hacker News 3/3 and Google Flights 3/3, with no navigation in any of them.
+Each task took 0 to 10 actions; the population lookup needed none because the answer reads the whole page. Earlier rounds failed for reasons that turned into fixes, listed under "Real-site fixes" in [design.md](design.md): styled dropdowns, result links that open new tabs, transparent checkboxes, repeated labels, password fields, slow navigations, loops between pages, ads picked as "best", and answers that only saw the visible part of a page.
 
-What each check looks at:
+Some failures came from the sites. Google Flights sometimes answers an automated search with "Oops, something went wrong"; EVE clicks Reload, which usually recovers. During testing arXiv's search took 45 seconds per request and later answered "Rate exceeded". In both cases the run ends with an answer that says what went wrong.
 
-- **Hotel:** the URL ends at Casa Flora, and the page reads "Design · Free cancellation enabled · Destination Lisbon". Opening Casa Flora without applying the search fails.
-- **Article:** the URL ends at the requested article.
-- **Wikipedia:** the URL is the Gödel's incompleteness theorems article. DeepSeek V4.1 Flash typed the query.
-- **Hacker News:** the URL is the comments page of the story ranked first on the front page at that moment. The page has 150+ links, so EVE answered through split target heads. In all three runs one chunk was confident enough to skip the final round.
-- **Google Flights:** `examples/flights.py` checks the results URL, one-way, Zürich, London, Fri Nov 20 and 2026, and that every visible flight departs that day.
+## Earlier checks
 
-All four Flights failures ended on Google's "Oops, something went wrong" page. One-way, both cities and the date were correct in each of them. Google showed that page after the Search click in 8 of the 12 runs; EVE clicked Reload, which recovered in 4 of those 8. Loading the same results URL directly never failed, so the error comes from Google's side of the automated search.
+The hotel fixture, the reading-room fixture, Wikipedia and Hacker News each passed 3/3 after `NAVIGATE`, Enter and Back were added, with no stray navigation. Starting from a blank tab, Hacker News, Wikipedia, GitHub and python.org tasks passed 8/8.
 
-The table leaves out wall-clock times. These runs went from a machine about 270 ms away from Wally's gateway, so most of each run was network travel and the seconds say little about the agent.
+The offline suite passes (`uv run pytest`, 84 tests), and so do the 22 local browser guard checks (`uv run python scripts/check_guards.py`). They cover chunking up to 700 targets, `NONE` never executing, the nesting limit, URL checks for `NAVIGATE`, Enter and Back, pop-up and covered-target handling, the loop guard, answers on every way a run can end, and the wally key fallback.
 
-The first nine Flights runs used GLM-5.3 Flash as the text helper; the last three, the hotel runs and the Wikipedia runs used DeepSeek V4.1 Flash, the current default. The helper only writes field text, so EVE's decisions are the same either way, and both helpers typed every field correctly. On one Flights field, measured from the same machine, DeepSeek answered in a median of 576 ms and GLM in 641 ms.
+## Timing
 
-The offline suite passes (`uv run pytest`, 73 tests), and so do the 21 local browser guard checks (`uv run python scripts/check_guards.py`). The tests cover chunking up to 700 targets, URL checks for `NAVIGATE` and the inspector's start page, `NONE` never executing, the state staying within System One's nesting limit, and the wally key fallback.
+This page leaves out wall-clock times. The runs went from a machine about 270 ms from Wally's gateway, so most of each run was network travel and the seconds say little about the agent.

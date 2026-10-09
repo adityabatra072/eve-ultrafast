@@ -12,6 +12,30 @@ TYPE_TEXT sends the goal, selected field, visible page context, and recent actio
 
 `NAVIGATE` sits in the operation list on every page, next to `DONE` and `BLOCKED`. EVE cannot write text, so when it picks `NAVIGATE` the text helper receives the goal, the current page and recent actions, and must return `{"url": "..."}`. The executor opens the address only if it parses as `http` or `https` with a host and no whitespace; anything else stops before the browser is touched. A rule tells EVE to navigate only from a blank page or when the goal needs a different site, and to use the current site's own links otherwise. Navigation resets the list of unsubmitted fields. The library and inspector accept no start page at all; the agent then begins on `about:blank`.
 
+## Operations without an element
+
+`PRESS_ENTER` appears only right after a `TYPE_TEXT` on the same page and sends one Enter key through CDP. Search boxes and to-do inputs that submit on Enter need it. `GO_BACK` appears once the run has been on another URL and steps back one history entry. Both reset the unsubmitted-fields list, like `NAVIGATE`.
+
+## The answer
+
+When EVE picks `DONE`, the agent reads the whole document's text (not only the visible part the policy saw), and the text helper writes a short answer to the goal from it. The prompt asks it to copy prices and numbers as written and to say plainly when the page lacks what was asked. A missing or invalid answer leaves `answer` empty and the run still ends `done`.
+
+## Real-site fixes
+
+Live runs on public sites turned up a handful of patterns the original fixtures never hit:
+
+- Styled dropdowns (Amazon's sort menu) lay a decorative label over a nearly transparent native `<select>`. Choosing an option sets the value and fires `change`, so the executor no longer hit-tests selects.
+- Result links with `target="_blank"` opened new tabs the agent never saw. Clicks now retarget their link or form to the agent's tab, and any pop-up a click still opens is loaded in the agent's tab and closed.
+- Styled checkboxes are transparent inputs over a drawn box. The snapshot and executor accept them, and a label drawn over its checkbox counts as the same control.
+- Several elements often share one label ("Toggle Todo", "Add to cart", "Reply"). Repeated labels get their row's text appended.
+- Heavy pages stay mid-navigation for seconds, and an evaluation can go unanswered while they do. Observation backs off for up to ten seconds, and an unanswered evaluation counts as a stale page instead of an error.
+- When the executor refuses a target before any input, the agent drops it for that page and EVE chooses again, instead of the run ending.
+- Goals that gather facts from several pages looped: the policy saw only the current page, so it never felt done. The state now lists `visited_pages`, the rules count a visited page as read, and the answer gets an excerpt of each earlier page.
+- A run that repeats the same action on the same page four times, or reaches the 60-action budget, now stops with an answer about what it found instead of an error.
+- A navigation the server takes longer than 30 seconds to answer no longer ends the run; the agent waits up to another minute for the new document.
+- "Best" goals sometimes opened sponsored listings. A rule now prefers regular results unless the goal asks for ads.
+- Password inputs are offered for typing. The snapshot reports only `filled` or empty and never reads a password back off the page. A password you put in the goal still shows up where the agent typed it: the trace and the decision trail.
+
 ## Fitting EVE's limits
 
 EVE answers System One requests on Wally with two limits Jev does not have: a choice question takes 2 to 26 options, and the state nests three levels deep at most.

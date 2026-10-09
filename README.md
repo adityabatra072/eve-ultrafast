@@ -6,7 +6,7 @@
 
 This is a fork of Browser Use's [jev-ultrafast](https://github.com/browser-use/jev-ultrafast). The loop is theirs. The decisions now come from [EVE](https://runwally.com), RunAnywhere's Jev-class decision model on Wally, built on Perplexity's open [pplx-decider-v1-27b](https://huggingface.co/perplexity-ai/pplx-decider-v1-27b). When the agent has to type into a field or open a website, DeepSeek V4.1 Flash on Wally writes the text or the address. One RunAnywhere key covers both.
 
-Give it one goal, with or without a start page. EVE picks an operation and an element and puts a probability on every option.
+Give it one goal, with or without a start page. EVE picks an operation and an element and puts a probability on every option. When it finishes, the text helper reads the final page and answers you: the product and its price, the number you asked for, or what is now on screen.
 
 <img src="docs/inspector.png" alt="The inspector on Google Flights: numbered elements on the live page, EVE's operation probabilities, and its ranking of the autocomplete suggestions" width="100%" />
 
@@ -24,7 +24,7 @@ Every observation produces a new element table:
 ...
 ```
 
-The operations are `CLICK`, `TYPE_TEXT`, `SELECT`, `SCROLL_UP`, `SCROLL_DOWN`, `WAIT`, `NAVIGATE`, `DONE`, and `BLOCKED`. The agent offers only operations and targets the page supports. `NAVIGATE` opens a different website: EVE decides when, and the text helper writes the address.
+The operations are `CLICK`, `TYPE_TEXT`, `SELECT`, `SCROLL_UP`, `SCROLL_DOWN`, `WAIT`, `PRESS_ENTER`, `GO_BACK`, `NAVIGATE`, `DONE`, and `BLOCKED`. The agent offers only operations and targets the page supports: `PRESS_ENTER` right after typing, `GO_BACK` once it has left a page. `NAVIGATE` opens a different website: EVE decides when, and the text helper writes the address.
 
 ```text
                         one EVE request
@@ -126,7 +126,9 @@ Every executed target resolves from an observed node. Model output never becomes
 
 ## Limits
 
-A `DONE` choice still needs an independent check. The DOM reader handles common HTML and ARIA controls, not the full accessible-name spec. The agent works in one tab. Shadow roots, frames, canvas, uploads, pop-up tabs, nested scrolling, and arbitrary keyboard widgets stay outside this MVP. `NAVIGATE` addresses come from the text helper's knowledge, so a guessed deep link can land on a missing page; the agent then works from there. Owned tabs share whichever Chrome profile you connect.
+The agent works in one tab. Links that would open a new tab open in that tab instead, and a pop-up a click still opens gets loaded there and closed. Password fields work. The agent never reads a password back off the page, though one you put in the goal appears in the trace where it was typed. An element the browser refuses to operate (covered, disabled) is dropped for that page and EVE chooses again.
+
+A `DONE` choice and its answer still deserve a check when it matters. The DOM reader handles common HTML and ARIA controls, not the full accessible-name spec. Shadow roots, frames, canvas, file uploads, nested scrolling, and arbitrary keyboard widgets stay outside it. `NAVIGATE` addresses come from the text helper's knowledge, so a guessed deep link can land on a missing page; the agent then works from there. Owned tabs share whichever Chrome profile you connect, including its logins.
 
 Google Flights sometimes answers an automated search with "Oops, something went wrong". EVE clicks Reload, which usually recovers. If Google keeps refusing, the run ends `blocked` and the flight check fails.
 
@@ -140,7 +142,7 @@ node --check eve_ultrafast/snapshot.js
 uv build
 ```
 
-Tests run offline. `uv run python scripts/check_guards.py` checks real controls in a local browser without model calls. Live examples, `scripts/smoke.py`, and the recording scripts make paid API calls. Credentials and raw traces stay out of git.
+Tests run offline. `uv run python scripts/check_guards.py` checks real controls in a local browser without model calls. `uv run python scripts/live_suite.py` runs 33 tasks on public websites (shopping, search, reference, docs, GitHub, news, video, forms, login, a to-do app) and checks each result on its own; pass task names to run a few. Live examples, the suite, `scripts/smoke.py`, and the recording scripts make paid API calls. Credentials and raw traces stay out of git.
 
 ---
 
