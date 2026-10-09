@@ -2,11 +2,19 @@
 
 The input is a natural-language goal. Every page observation builds an indexed table of accessible elements and their current values. One node receives one index, even when it supports both clicking and typing.
 
-One TypeSafe request asks which operation to perform and which target would be appropriate for each available operation. The executor consumes only the target head corresponding to the selected operation. This avoids serial operation-then-target calls and rejects targets incompatible with the operation. Dropdown targets include a code-owned option index.
+One EVE request asks which operation to perform and which target would be appropriate for each available operation. The executor consumes only the target head corresponding to the selected operation. This avoids serial operation-then-target calls and rejects targets incompatible with the operation. Dropdown targets include a code-owned option index.
 
-Operation and target questions receive the same next-step rules. Target criteria include current values and checked/selected state. The questions run independently: a target cannot read the operation answer, so its premise explicitly names the operation it assumes.
+Operation and target questions receive the same next-step rules, one rule per list item. Target criteria include current values and control state in words (checked, unchecked, expanded). The questions run independently: a target cannot read the operation answer, so its premise explicitly names the operation it assumes.
 
 TYPE_TEXT sends the goal, selected field, visible page context, and recent actions to a small LLM. Its JSON must contain exactly one valid `text` value. The code does not extract quoted literals. A value can be reused after a stale decision only while the entire helper input is identical, and is discarded after a successful mutation.
+
+## Fitting EVE's limits
+
+EVE answers System One requests on Wally with two limits Jev does not have: a choice question takes 2 to 26 options, and the state nests three levels deep at most.
+
+A head with one candidate needs no question. A head with up to 26 candidates is one question. A larger head becomes chunks of at most 25 elements plus a `NONE` option, all in the first request. In our traces the chunk holding the right element answers with a peaked leader (0.87 to 0.97) while the other chunks put their weight on `NONE` or spread it thin. When one chunk leader reaches 0.8 and no other chunk's best element passes 0.25, the agent takes that leader. Otherwise it sends one more request with the top few elements of each chunk; if those still exceed 26, it repeats. `NONE` can never execute.
+
+The element table and the action history reach EVE as text lines, which keeps the state shallow and reads well. The state also lists `typed_not_yet_submitted`: fields typed since the last button or link click. Without it EVE sometimes opened a visible result before submitting the search that should have filtered it.
 
 ## Runtime
 
