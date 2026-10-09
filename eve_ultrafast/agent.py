@@ -259,6 +259,10 @@ class Agent:
                 scrolls += 1
             if scrolls >= 15:
                 return self.finish("blocked", state["page"], "Scrolled 15 times in a row")
+            # EVE sees controls near the screen; the answer step reads the whole page. During a long scroll,
+            # ask it now and then whether the goal is already met, instead of scrolling to the cap.
+            if scrolls and scrolls % 4 == 0 and self.finish("done", state["page"], only_if_complete=True):
+                return self.snapshot()
             state["status"] = "ready"
         else:
             raise ValueError("Unknown command")
@@ -337,8 +341,10 @@ class Agent:
             ]
         return out
 
-    def finish(self, status, page, reason=None):
-        """End the run. Done or not, the text helper answers from what the pages showed."""
+    def finish(self, status, page, reason=None, only_if_complete=False):
+        """End the run. Done or not, the text helper answers from what the pages showed.
+
+        With only_if_complete, end it only when the answer step confirms the goal is met; else change nothing."""
         state = self.state
         try:
             # The answer reads the whole document (or PDF), not only the part on screen.
@@ -386,6 +392,8 @@ class Agent:
                     verdict = answer(shot)
         except (ValueError, RuntimeError):
             verdict = {}
+        if only_if_complete and verdict.get("complete") is not True:
+            return None
         answer = verdict.get("answer")
         # The answer step reads every page the run saw, so it doubles as a check on EVE's DONE.
         # Changed fields with a submit button still on screen mean the search or form was never sent.

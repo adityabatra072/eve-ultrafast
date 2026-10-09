@@ -779,6 +779,15 @@ def test_a_run_stopped_by_a_limit_is_done_when_the_answer_was_found(runner, monk
     assert runner.state["status"] == "done" and runner.state["stop_reason"] == "Scrolled 15 times in a row"
 
 
+def test_a_check_during_a_long_scroll_ends_the_run_only_when_the_goal_is_met(runner, monkeypatch):
+    status_before = runner.state["status"]
+    monkeypatch.setattr(loop, "final_answer", Mock(return_value=({"answer": "Not yet", "complete": False}, {})))
+    assert runner.finish("done", runner.state["page"], only_if_complete=True) is None
+    assert runner.state["status"] == status_before and not any(h["kind"] == "check" for h in runner.state["history"])
+    monkeypatch.setattr(loop, "final_answer", Mock(return_value=({"answer": "2013", "complete": True}, {})))
+    assert runner.finish("done", runner.state["page"], only_if_complete=True)
+    assert runner.state["status"] == "done" and runner.state["answer"] == "2013"
+
 def test_answer_parses_complete_and_missing(monkeypatch):
     monkeypatch.setenv("TEXT_MODEL_API_KEY", "test")
     content = '{"answer": "Page 6 of 20", "complete": false, "missing": "go to page 20"}'

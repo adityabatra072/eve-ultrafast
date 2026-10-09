@@ -136,7 +136,7 @@ The agent never solves CAPTCHAs or Cloudflare checks. It waits up to 15 seconds 
 uv run pytest                                # offline tests
 uv run python scripts/check_guards.py        # real browser, no model calls
 uv run python scripts/live_suite.py -n 3     # 83 tasks on public sites, 3 runs each
-uv run python scripts/live_suite.py --holdout  # 49 tasks never used for tuning
+uv run python scripts/live_suite.py --holdout  # 68 tasks never used for tuning
 ```
 
 Pass task names to run a few, for example `scripts/live_suite.py amazon_sort booking_goa`. Results and traces land in `artifacts/live-suite/`; the latest numbers are in [results.md](results.md).
