@@ -8,6 +8,10 @@ Operation and target questions receive the same next-step rules, one rule per li
 
 TYPE_TEXT sends the goal, selected field, visible page context, and recent actions to a small LLM. Its JSON must contain exactly one valid `text` value. The code does not extract quoted literals. A value can be reused after a stale decision only while the entire helper input is identical, and is discarded after a successful mutation.
 
+## Opening other websites
+
+`NAVIGATE` sits in the operation list on every page, next to `DONE` and `BLOCKED`. EVE cannot write text, so when it picks `NAVIGATE` the text helper receives the goal, the current page and recent actions, and must return `{"url": "..."}`. The executor opens the address only if it parses as `http` or `https` with a host and no whitespace; anything else stops before the browser is touched. A rule tells EVE to navigate only from a blank page or when the goal needs a different site, and to use the current site's own links otherwise. Navigation resets the list of unsubmitted fields. The library and inspector accept no start page at all; the agent then begins on `about:blank`.
+
 ## Fitting EVE's limits
 
 EVE answers System One requests on Wally with two limits Jev does not have: a choice question takes 2 to 26 options, and the state nests three levels deep at most.

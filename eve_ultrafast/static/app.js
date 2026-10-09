@@ -9,6 +9,7 @@ const goals = {
     'Use the destination search and filters to find Design stays in Lisbon with Free cancellation, then open Casa Flora.',
   research:
     "Open the article about using finite choices to control browser agents.",
+  web: "Go to Hacker News and open the comments of the top story.",
 };
 const escape = (value) =>
   String(value ?? "").replace(
@@ -36,6 +37,7 @@ function controls() {
   $("start").disabled = busy;
   $("scenario").disabled = busy;
   $("goal").disabled = busy;
+  $("start-url").disabled = busy;
   $("choose").disabled = busy || !live;
   $("execute").disabled = busy || !state?.decision || !live;
   $("auto").disabled = busy || !live;
@@ -151,12 +153,13 @@ $("task-form").addEventListener("submit", (event) => {
   automatic = false;
   perform(
     () =>
-      call("reset", { scenario: $("scenario").value, goal: $("goal").value }),
+      call("reset", { scenario: $("scenario").value, goal: $("goal").value, url: $("start-url").value }),
     "Opening a fresh browser…",
   );
 });
 $("scenario").addEventListener("change", () => {
   $("goal").value = goals[$("scenario").value];
+  $("start-url").hidden = $("scenario").value !== "web";
 });
 $("choose").addEventListener("click", () =>
   perform(() => call("predict"), "EVE is comparing the actions…"),

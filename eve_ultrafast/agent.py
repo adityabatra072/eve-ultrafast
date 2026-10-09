@@ -6,12 +6,13 @@ import time
 from pathlib import Path
 
 from .browser import Browser, StalePage
-from .model import action_space, choose, field_context, field_text, warm
+from .model import action_space, choose, field_context, field_text, navigate_context, page_url, warm
 from .questions import MAX_STEPS
 
 
 class Agent:
     def __init__(self, url, goals, *, record_dir=None, screenshots=False):
+        # With no start URL the agent opens a blank tab and NAVIGATEs on its own.
         task = goals.strip() if isinstance(goals, str) else "\n".join(goals).strip()
         if not task:
             raise ValueError("Supply a task")
@@ -19,7 +20,7 @@ class Agent:
         self.pending_text = None
         warming = threading.Thread(target=warm, daemon=True)
         warming.start()
-        self.browser = Browser(url)
+        self.browser = Browser(url or "about:blank")
         self.record_dir = Path(record_dir) if record_dir else None
         self.screenshots = screenshots or bool(record_dir)
         try:
@@ -102,19 +103,25 @@ class Agent:
                 state["plan_index"] = int(selected == "DONE")
                 state["elapsed_ms"] = round((time.perf_counter() - state["started_at"]) * 1000)
                 return self.snapshot()
-            action = next(a for a in page["actions"] if a["id"] == selected)
+            if selected == "NAVIGATE":
+                action = {"id": "NAVIGATE", "kind": "navigate", "label": "Open a web address"}
+            else:
+                action = next(a for a in page["actions"] if a["id"] == selected)
             if len(state["history"]) >= MAX_STEPS:
                 state["status"] = "blocked"
                 raise ValueError(f"Stopped at the {MAX_STEPS}-action demo budget")
             text, helper = None, None
-            if action["kind"] == "fill":
+            if action["kind"] in {"fill", "navigate"}:
                 if not state["browser"].fresh(page):
                     raise StalePage("Page changed before text generation. Choose again.")
-                context = field_context(state["goal"], action, page, state["history"])
+                if action["kind"] == "fill":
+                    context, write = field_context(state["goal"], action, page, state["history"]), field_text
+                else:
+                    context, write = navigate_context(state["goal"], page, state["history"]), page_url
                 if self.pending_text and self.pending_text[0] == context:
                     _, text, helper = self.pending_text
                 else:
-                    text, helper = field_text(context)
+                    text, helper = write(context)
                     self.pending_text = (context, text, helper)
                     state["text_calls"].append({**helper, "field": action["label"], "value": text})
             # Browser.act checks freshness immediately before input, including after text generation.

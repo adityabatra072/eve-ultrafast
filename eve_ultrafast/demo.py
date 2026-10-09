@@ -45,16 +45,27 @@ def command(name, body):
     global AGENT
     if name == "reset":
         scenario = body.get("scenario", "flights")
-        if scenario not in {"travel", "research", "flights"}:
+        if scenario not in {"travel", "research", "flights", "web"}:
             raise ValueError("Unknown demo scenario")
+        start = body.get("url", "").strip()
+        if scenario == "web" and start:
+            # Only a bare host like news.ycombinator.com gets https:// added; javascript: and friends stay rejected.
+            if "://" not in start and ":" not in start.split("/")[0]:
+                start = "https://" + start
+            parts = urlparse(start)
+            try:
+                parts.port
+            except ValueError:
+                parts = None
+            if not parts or parts.scheme not in {"http", "https"} or not parts.hostname or len(start) > 2000:
+                raise ValueError("Enter an http(s) address, or leave it empty to let the agent choose")
         goal = body.get("goal", "").strip()
         if not goal or len(goal) > 2000:
             raise ValueError("Enter 1–2,000 characters")
         close_browser()
+        urls = {"flights": "https://www.google.com/travel/flights?hl=en", "web": start or "about:blank"}
         AGENT = Agent(
-            "https://www.google.com/travel/flights?hl=en"
-            if scenario == "flights"
-            else f"{ORIGIN}/fixture.html?scenario={scenario}",
+            urls.get(scenario, f"{ORIGIN}/fixture.html?scenario={scenario}"),
             goal,
             screenshots=True,
             record_dir=Path.cwd() / "artifacts" / "frames" if body.get("record") else None,

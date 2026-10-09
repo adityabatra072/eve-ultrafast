@@ -95,11 +95,7 @@ class Browser:
         # Keep rAF/menus rendering in an owned background tab, without activating the user's Chrome tab.
         self.call("Emulation.setFocusEmulationEnabled", enabled=True)
         self.call("Page.navigate", url=url)
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            if self.evaluate("document.readyState") == "complete":
-                break
-            time.sleep(0.02)
+        self.wait_for_load()
 
     def call(self, method, **params):
         return cdp(method, session_id=self.session, **params)
@@ -172,8 +168,20 @@ class Browser:
         if action["kind"] == "wait":
             time.sleep(0.1)
         result = browser_operation({"operation": "act", "session": self.session, "action": action, "text": text})
-        self.after_input = action if action["kind"] != "wait" else None
+        self.after_input = action if action["kind"] not in {"wait", "navigate"} else None
+        if action["kind"] == "navigate":
+            self.wait_for_load()
         return result
+
+    def wait_for_load(self, seconds=15):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            try:
+                if self.evaluate("document.readyState") == "complete":
+                    return
+            except StalePage:
+                pass
+            time.sleep(0.05)
 
     def close(self):
         if self.target:
@@ -206,6 +214,9 @@ def browser_operation(request):
         kind = action["kind"]
         if kind == "scroll":
             call("Input.dispatchMouseEvent", type="mouseWheel", x=550, y=650, deltaX=0, deltaY=action["delta"])
+        elif kind == "navigate":
+            # The helper's URL was checked for an http(s) scheme and host before it got here.
+            call("Page.navigate", url=request["text"])
         elif kind != "wait":
             if type(action["node"]) is not int:
                 raise ValueError("Invalid observed node")

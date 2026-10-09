@@ -6,6 +6,7 @@ Read README.md before editing. Keep the loop small: page -> indexed elements -> 
 - EVE chooses an operation and operation-specific target heads in one request. Consume only the selected operation's target.
 - EVE takes 2 to 26 options per choice and a shallow state. Split larger heads into chunks with a NONE option; keep element objects free of arrays.
 - Targets must map to observed elements and supported operations. Never let the model emit selectors or executable code.
+- NAVIGATE opens only http(s) URLs with a host, written by the text helper and checked before the browser sees them.
 - TYPE_TEXT invokes the text LLM. Cache a stale retry's value only while its entire helper input is identical.
 - Never retry a browser mutation. Log execution before observing its result.
 - Screenshots are optional; the model does not consume them. Keep demonstration footage at its original speed.

@@ -5,10 +5,11 @@ import math
 import os
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 
-from .questions import NEXT_ACTION, TARGET, TEXT_VALUE
+from .questions import NEXT_ACTION, TARGET, TEXT_VALUE, URL_VALUE
 
 CLIENT = httpx.Client(http2=True, timeout=25)
 API_BASE = "https://inference.runanywhere.ai/v1"
@@ -160,7 +161,7 @@ def unsubmitted(history):
     for h in history:
         if h.get("kind") == "fill" and h.get("action") not in fields:
             fields.append(h["action"])
-        elif h.get("kind") == "click" and h.get("role") in {"button", "link"}:
+        elif h.get("kind") == "navigate" or (h.get("kind") == "click" and h.get("role") in {"button", "link"}):
             fields = []
     return ", ".join(fields) or "none"
 
@@ -255,7 +256,11 @@ def choose(state, goal, history):
     }
     operations = {key: labels[key] for key in targets}
     operations.update({key: value["label"] for key, value in controls.items()})
-    operations.update(DONE="Every requirement is visibly satisfied.", BLOCKED="No supported operation can progress.")
+    operations.update(
+        NAVIGATE="Open a different website by its address. A small LLM will write the URL from the goal.",
+        DONE="Every requirement is visibly satisfied.",
+        BLOCKED="No supported operation can progress.",
+    )
     questions = {
         "operation": {"type": "choice", "criteria": operations, "instructions": {"goal": goal, "rules": NEXT_ACTION}}
     }
@@ -322,10 +327,19 @@ def field_context(goal, action, page, history):
     }
 
 
-def field_text(context):
+def navigate_context(goal, page, history):
+    return {
+        "goal": goal,
+        "page": {"url": page["url"], "title": page["title"], "text": page["text"][:3000]},
+        "recent_actions": [{k: h.get(k) for k in ("action", "text")} for h in history[-6:]],
+    }
+
+
+def helper(system, context, field):
+    """Ask the small OpenAI-compatible model for one JSON string field. Returns (value or None, metadata)."""
     key = os.environ.get("TEXT_MODEL_API_KEY") or api_key(required=False)
     if not key:
-        raise ValueError("TYPE_TEXT needs RUNANYWHERE_API_KEY; no text is hardcoded or guessed by the executor.")
+        raise ValueError("The text helper needs RUNANYWHERE_API_KEY; no text is hardcoded or guessed by the executor.")
     base = os.environ.get("TEXT_MODEL_BASE_URL", API_BASE).rstrip("/")
     model = os.environ.get("TEXT_MODEL", "deepseek-v4.1-flash")
     # Wally models run at their default reasoning. Other providers can be told to skip or limit it.
@@ -345,23 +359,34 @@ def field_text(context):
             "response_format": {"type": "json_object"},
             **reasoning,
             "messages": [
-                {"role": "system", "content": TEXT_VALUE},
-                {
-                    "role": "user",
-                    "content": json.dumps(context),
-                },
+                {"role": "system", "content": system},
+                {"role": "user", "content": json.dumps(context)},
             ],
         },
     )
+    latency_ms = round((time.perf_counter() - started) * 1000)
+    meta = {"model": model, "latency_ms": latency_ms, "usage": result.get("usage", {})}
     try:
         output = json.loads(result["choices"][0]["message"]["content"])
-        value = output["text"]
-        if set(output) != {"text"} or not isinstance(value, str) or not value.strip() or len(value) > 2000:
+        value = output[field]
+        if set(output) != {field} or not isinstance(value, str) or not value.strip() or len(value) > 2000:
             raise ValueError()
     except (ValueError, KeyError, TypeError):
-        raise ValueError("Text helper returned no valid field value; nothing typed.") from None
-    return value, {
-        "model": model,
-        "latency_ms": round((time.perf_counter() - started) * 1000),
-        "usage": result.get("usage", {}),
-    }
+        return None, meta
+    return value, meta
+
+
+def field_text(context):
+    value, meta = helper(TEXT_VALUE, context, "text")
+    if value is None:
+        raise ValueError("Text helper returned no valid field value; nothing typed.")
+    return value, meta
+
+
+def page_url(context):
+    """A web address for NAVIGATE. Only plain http(s) URLs with a host ever reach the browser."""
+    value, meta = helper(URL_VALUE, context, "url")
+    url = urlsplit(value.strip()) if value else None
+    if not url or url.scheme not in {"http", "https"} or not url.hostname or any(c.isspace() for c in value.strip()):
+        raise ValueError("Text helper returned no valid web address; nothing opened.")
+    return value.strip(), meta

@@ -550,3 +550,96 @@ def test_running_dedicated_chrome_is_reused(harness, monkeypatch):
     monkeypatch.setattr(harness, "listening", lambda _port: True)
     assert harness.connect() is True
     harness.subprocess.Popen.assert_not_called()
+
+
+def test_navigate_is_always_offered(monkeypatch):
+    monkeypatch.setenv("RUNANYWHERE_API_KEY", "test")
+    sent = []
+    monkeypatch.setattr(model, "post_json", lambda _u, _k, body: sent.append(body) or {
+        "model": "eve", "answers": {"operation": choice(body["questions"]["operation"]["criteria"], "NAVIGATE")},
+    })
+    blank = {"url": "about:blank", "title": "", "text": "", "actions": []}
+    d = model.choose(blank, "Go to Hacker News", [])
+    assert d["choice"] == "NAVIGATE" and d["target"] is None
+    assert set(sent[0]["questions"]) == {"operation"}
+
+
+@pytest.mark.parametrize("content, url", [
+    ('{"url":"https://news.ycombinator.com/"}', "https://news.ycombinator.com/"),
+    ('{"url":" http://example.com/search?q=a "}', "http://example.com/search?q=a"),
+])
+def test_navigate_url_accepts_plain_web_addresses(monkeypatch, content, url):
+    monkeypatch.setenv("TEXT_MODEL_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", Mock(return_value={"choices": [{"message": {"content": content}}]}))
+    assert model.page_url({"goal": "Go"})[0] == url
+
+
+@pytest.mark.parametrize("content", [
+    '{"url":"javascript:alert(1)"}', '{"url":"file:///etc/passwd"}', '{"url":"chrome://settings"}',
+    '{"url":"https://"}', '{"url":"news.ycombinator.com"}', '{"url":"https://a b.com"}', '{"text":"https://x.com"}',
+    '{"url":null}', "Sure! https://x.com",
+])
+def test_navigate_url_rejects_anything_else(monkeypatch, content):
+    monkeypatch.setenv("TEXT_MODEL_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", Mock(return_value={"choices": [{"message": {"content": content}}]}))
+    with pytest.raises(ValueError, match="nothing opened"):
+        model.page_url({"goal": "Go"})
+
+
+def test_navigate_executes_the_generated_url_and_logs_it(runner, monkeypatch):
+    writer = Mock(return_value=("https://news.ycombinator.com/", {"model": "test", "latency_ms": 5}))
+    monkeypatch.setattr(loop, "page_url", writer)
+    runner.state["decision"] = {**decision("NAVIGATE"), "operation": "NAVIGATE", "target": None,
+                                "probabilities": {"NAVIGATE": 0.9}}
+    runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    action, _page = runner.state["browser"].act.call_args.args
+    assert action["kind"] == "navigate"
+    assert runner.state["browser"].act.call_args.kwargs["text"] == "https://news.ycombinator.com/"
+    assert runner.state["history"][-1]["kind"] == "navigate"
+    assert runner.state["history"][-1]["text"] == "https://news.ycombinator.com/"
+
+
+def test_navigation_clears_unsubmitted_fields():
+    history = [{"action": "Search", "kind": "fill", "text": "x"}, {"action": "Open", "kind": "navigate", "text": "https://a.com"}]
+    assert model.unsubmitted(history) == "none"
+
+
+def test_browser_navigates_with_cdp_and_never_types(monkeypatch):
+    import eve_ultrafast.browser as browser
+
+    cdp = Mock(return_value={})
+    monkeypatch.setattr(browser, "cdp", cdp)
+    browser_operation({"operation": "act", "session": "s", "action": {"id": "NAVIGATE", "kind": "navigate"},
+                       "text": "https://example.com/"})
+    assert cdp.call_args_list == [(("Page.navigate",), {"session_id": "s", "url": "https://example.com/"})]
+
+
+BAD_START_URLS = [
+    "javascript:alert(1)", "file:///etc/passwd", "ftp://x.com", "https://", "data:text/html,x",
+    "localhost:8080", "https://a.com:99999",
+]
+
+
+@pytest.mark.parametrize("url", BAD_START_URLS)
+def test_inspector_rejects_non_web_start_urls(monkeypatch, url):
+    from eve_ultrafast import demo
+
+    monkeypatch.setattr(demo, "Agent", Mock(side_effect=AssertionError("no browser for a rejected URL")))
+    with pytest.raises(ValueError, match="http"):
+        demo.command("reset", {"scenario": "web", "goal": "Go", "url": url})
+
+
+@pytest.mark.parametrize("url, start", [
+    ("news.ycombinator.com", "https://news.ycombinator.com"),
+    ("http://127.0.0.1:8766/fixture.html", "http://127.0.0.1:8766/fixture.html"),
+    ("", "about:blank"),
+])
+def test_inspector_web_scenario_start_page(monkeypatch, url, start):
+    from eve_ultrafast import demo
+
+    agent = Mock(state={}, snapshot=Mock(return_value={"status": "ready"}))
+    monkeypatch.setattr(demo, "Agent", Mock(return_value=agent))
+    monkeypatch.setattr(demo, "AGENT", None)
+    demo.command("reset", {"scenario": "web", "goal": "Go", "url": url})
+    assert demo.Agent.call_args.args[0] == start
+    monkeypatch.setattr(demo, "AGENT", None)

@@ -1,11 +1,11 @@
-"""uv run --env-file .env python examples/run.py --url URL --goal 'A narrow goal'"""
+"""uv run --env-file .env python examples/run.py [--url URL] --goal 'A narrow goal'"""
 
 import argparse
 
 from eve_ultrafast import Agent
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--url", required=True)
+parser.add_argument("--url", help="Start page. Leave it out and the agent opens the site itself.")
 parser.add_argument("--goal", action="append", required=True, help="Repeat for an ordered list of goals.")
 args = parser.parse_args()
 

@@ -4,9 +4,9 @@
 
 **A browser agent with a dynamic, indexed action space, running on EVE.**
 
-This is a fork of Browser Use's [jev-ultrafast](https://github.com/browser-use/jev-ultrafast). The loop is theirs. The decisions now come from [EVE](https://runwally.com), RunAnywhere's Jev-class decision model on Wally, built on Perplexity's open [pplx-decider-v1-27b](https://huggingface.co/perplexity-ai/pplx-decider-v1-27b). When the operation is `TYPE_TEXT`, DeepSeek V4.1 Flash on Wally writes the text. One RunAnywhere key covers both.
+This is a fork of Browser Use's [jev-ultrafast](https://github.com/browser-use/jev-ultrafast). The loop is theirs. The decisions now come from [EVE](https://runwally.com), RunAnywhere's Jev-class decision model on Wally, built on Perplexity's open [pplx-decider-v1-27b](https://huggingface.co/perplexity-ai/pplx-decider-v1-27b). When the agent has to type into a field or open a website, DeepSeek V4.1 Flash on Wally writes the text or the address. One RunAnywhere key covers both.
 
-Give it one goal. EVE picks an operation and an element and puts a probability on every option.
+Give it one goal, with or without a start page. EVE picks an operation and an element and puts a probability on every option.
 
 <img src="docs/inspector.png" alt="The inspector on Google Flights: numbered elements on the live page, EVE's operation probabilities, and its ranking of the autocomplete suggestions" width="100%" />
 
@@ -24,7 +24,7 @@ Every observation produces a new element table:
 ...
 ```
 
-The operations are `CLICK`, `TYPE_TEXT`, `SELECT`, `SCROLL_UP`, `SCROLL_DOWN`, `WAIT`, `DONE`, and `BLOCKED`. The agent offers only operations and targets the page supports.
+The operations are `CLICK`, `TYPE_TEXT`, `SELECT`, `SCROLL_UP`, `SCROLL_DOWN`, `WAIT`, `NAVIGATE`, `DONE`, and `BLOCKED`. The agent offers only operations and targets the page supports. `NAVIGATE` opens a different website: EVE decides when, and the text helper writes the address.
 
 ```text
                         one EVE request
@@ -69,7 +69,7 @@ uv run eve
 
 The agent reads the key `wally account login` saved. To use a key directly, `cp .env.example .env` and set `RUNANYWHERE_API_KEY`.
 
-Open **http://127.0.0.1:8766** and click **Start demo → Run automatically**. The inspector shows numbered elements, operation probabilities, target probabilities, and executed actions. **Choose next** pauses before execution.
+Open **http://127.0.0.1:8766** and click **Start demo → Run automatically**. The inspector shows numbered elements, operation probabilities, target probabilities, and executed actions. **Choose next** pauses before execution. Pick **Any website** to give it your own goal, with an optional start URL. Leave the URL empty and EVE opens the right site itself.
 
 Chrome connects through [Browser Harness](https://github.com/browser-use/browser-harness), installed by `uv sync`. If one of your browsers already has remote debugging on (chrome://inspect → "Allow remote debugging"), the agent works in a background tab there. Otherwise it starts its own Chrome with a separate profile in `~/.cache/eve-ultrafast/chrome` on port 9333 and reuses it on later runs. Set `EVE_HEADLESS=1` to keep that window hidden, or `BU_CDP_URL` to use any other browser with a debugging port.
 
@@ -89,12 +89,15 @@ with Agent(
         print(state["elapsed_ms"], state["status"])
 ```
 
-Run it with `uv run --env-file .env python your_script.py`. The same policy handles other tasks:
+Run it with `uv run --env-file .env python your_script.py`. Pass `None` as the URL and the agent starts from a blank tab. The same policy handles other tasks:
 
 ```bash
 uv run --env-file .env python examples/run.py \
   --url https://en.wikipedia.org/wiki/Main_Page \
   --goal 'Find and open the Wikipedia article about Gödel’s incompleteness theorems.'
+
+uv run --env-file .env python examples/run.py \
+  --goal 'Go to Hacker News and open the comments of the top story.'
 ```
 
 `uv run --env-file .env python examples/flights.py --keep-open` runs the flight search, checks the route, date and results on the final page, and saves its trace. It never selects or books a flight.
@@ -108,7 +111,7 @@ uv run --env-file .env python examples/run.py \
 - **Waits look for useful state.** After typing into a combobox, the agent waits up to 200 ms for visible suggestions. Other interactions get two animation frames or 50 ms.
 - **The connection opens early.** The agent opens its HTTP/2 connection to Wally while the first page loads.
 
-Every executed target resolves from an observed node. Model output never becomes selectors, coordinates, shell commands, or JavaScript. The text helper's output has to parse as a small JSON object before anything gets typed.
+Every executed target resolves from an observed node. Model output never becomes selectors, coordinates, shell commands, or JavaScript. The text helper's output has to parse as a small JSON object before anything gets typed, and `NAVIGATE` only opens plain `http(s)` addresses with a host.
 
 ## Small enough to read
 
@@ -123,7 +126,7 @@ Every executed target resolves from an observed node. Model output never becomes
 
 ## Limits
 
-A `DONE` choice still needs an independent check. The DOM reader handles common HTML and ARIA controls, not the full accessible-name spec. Shadow roots, frames, canvas, uploads, pop-up tabs, nested scrolling, and arbitrary keyboard widgets stay outside this MVP. Owned tabs share whichever Chrome profile you connect.
+A `DONE` choice still needs an independent check. The DOM reader handles common HTML and ARIA controls, not the full accessible-name spec. The agent works in one tab. Shadow roots, frames, canvas, uploads, pop-up tabs, nested scrolling, and arbitrary keyboard widgets stay outside this MVP. `NAVIGATE` addresses come from the text helper's knowledge, so a guessed deep link can land on a missing page; the agent then works from there. Owned tabs share whichever Chrome profile you connect.
 
 Google Flights sometimes answers an automated search with "Oops, something went wrong". EVE clicks Reload, which usually recovers. If Google keeps refusing, the run ends `blocked` and the flight check fails.
 
