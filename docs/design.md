@@ -16,9 +16,24 @@ TYPE_TEXT sends the goal, selected field, visible page context, and recent actio
 
 `PRESS_ENTER` appears only right after a `TYPE_TEXT` on the same page and sends one Enter key through CDP. Search boxes and to-do inputs that submit on Enter need it. `GO_BACK` appears once the run has been on another URL and steps back one history entry. Both reset the unsubmitted-fields list, like `NAVIGATE`.
 
+## Frames, shadow DOM, hover, files and dialogs
+
+- **Frames.** Same-origin frames (w3schools "Try it" results, jQuery UI demos, nested framesets) are read like the page: their controls carry the frame's offset, and the executor hit-tests inside the frame. A cross-origin frame cannot be read, so it shows up as one action that opens its address in the tab.
+- **Shadow DOM.** Open shadow roots are searched for controls and text, and hit tests run inside the root that owns the element.
+- **Hover.** Menus, dropdown parents and figures that hide a link or caption until hovered become `HOVER` targets. Moving the pointer away from a hover can close a menu and shift the page, so while the pointer rests from a hover the next click first moves there, waits a moment and measures again.
+- **Uploads.** File inputs are offered only when the caller passes `files=[...]` to `Agent`; each allowed file becomes one choice, and the executor sets it through CDP. The state lists `files_not_attached`, because without it EVE clicked a button named Upload before attaching anything.
+- **Downloads.** Chrome saves downloads to `~/Downloads/eve-ultrafast` (`EVE_DOWNLOADS` changes it). A click that saves a file records it, and the answer names it. `SAVE_PDF` prints the page to an A4 PDF in the same folder.
+- **Dialogs.** An open alert, confirm or prompt freezes the page, so the agent checks for one before reading the page. While one is open, EVE sees the dialog as the page, with OK and Cancel as its only controls; a prompt's reply comes from the text helper.
+- **Keys.** `PRESS_KEY` is one more head with a fixed list (Escape, Tab, arrows, Page Up/Down, Home, End, Space, Backspace, Delete).
+- **Dates and sliders.** Date, time and range inputs take a formatted value set through the element's own setter; the text helper gets the input type and, for a slider, its min, max and step.
+- **Script-wired controls.** Table headers, links without `href` and elements with click-handler attributes are offered even though they are not buttons, and the screen is sampled for anything with a pointer cursor.
+- **Below the fold.** Controls up to one screen below the visible area are offered; the executor scrolls a target into view before measuring it.
+
 ## The answer
 
-When EVE picks `DONE`, the agent reads the whole document's text (not only the visible part the policy saw), and the text helper writes a short answer to the goal from it. The prompt asks it to copy prices and numbers as written and to say plainly when the page lacks what was asked. A missing or invalid answer leaves `answer` empty and the run still ends `done`.
+Every run ends with an answer. The agent reads the whole document (open shadow roots and same-origin frames included, or a PDF's own text), keeps the passages that share the most words with the goal when the page is long, and adds the text of earlier pages it left. The text helper returns the answer, whether the goal is complete, and what is missing if not.
+
+The completion flag checks EVE. A `DONE` the helper calls incomplete goes back to work, with the missing step added to the history, at most twice. A run that stopped (a limit, or EVE's `BLOCKED`) counts as done when the helper confirms everything the goal asked for was done or found. The prompt asks it to copy prices and numbers as written and to say plainly when the page lacks what was asked. A missing or invalid answer leaves `answer` empty and the run still ends `done`.
 
 ## Real-site fixes
 
@@ -28,12 +43,18 @@ Live runs on public sites turned up a handful of patterns the original fixtures 
 - Result links with `target="_blank"` opened new tabs the agent never saw. Clicks now retarget their link or form to the agent's tab, and any pop-up a click still opens is loaded in the agent's tab and closed.
 - Styled checkboxes are transparent inputs over a drawn box. The snapshot and executor accept them, and a label drawn over its checkbox counts as the same control.
 - Several elements often share one label ("Toggle Todo", "Add to cart", "Reply"). Repeated labels get their row's text appended.
-- Heavy pages stay mid-navigation for seconds, and an evaluation can go unanswered while they do. Observation backs off for up to ten seconds, and an unanswered evaluation counts as a stale page instead of an error.
+- Heavy pages stay mid-navigation for seconds, and an evaluation can go unanswered while they do. Observation backs off for up to thirty seconds, and an unanswered evaluation counts as a stale page instead of an error.
 - When the executor refuses a target before any input, the agent drops it for that page and EVE chooses again, instead of the run ending.
 - Goals that gather facts from several pages looped: the policy saw only the current page, so it never felt done. The state now lists `visited_pages`, the rules count a visited page as read, and the answer gets an excerpt of each earlier page.
 - A run that repeats the same action on the same page four times, or reaches the 60-action budget, now stops with an answer about what it found instead of an error.
 - A navigation the server takes longer than 30 seconds to answer no longer ends the run; the agent waits up to another minute for the new document.
 - "Best" goals sometimes opened sponsored listings. A rule now prefers regular results unless the goal asks for ads.
+- EVE accepts at most about 8,000 tokens per question. A big page (a full Hacker News front page) first drops controls below the fold, then trims text and labels, and EVE is asked again.
+- The first click into a frame can leave keyboard focus behind, so typed text went nowhere. The executor focuses the field before typing and, if the field still lacks the text, sets it through the element's own setter.
+- Chrome overwrites a download that has the same name as an existing file. Downloads are detected by modification time, not by new names, and files that finish after the click are picked up when the run ends. A PDF that opens in the viewer instead of downloading can be saved with `SAVE_FILE`.
+- Menu items and grid cells that wrap their own link or checkbox were offered twice, so EVE could pick the inert container. The container is skipped, and labels have their whitespace collapsed.
+- An action that visibly changed nothing is set aside until the page changes, so EVE tries something else instead of clicking the same search box three times. A target the executor refused is set aside the same way, per page state.
+- Live clocks and tickers kept every decision stale. Actions that aim at no element (scroll, keys, navigation, waiting, DONE) no longer need the page to be unchanged, and typing uses the field's own guard.
 - Password inputs are offered for typing. The snapshot reports only `filled` or empty and never reads a password back off the page. A password you put in the goal still shows up where the agent typed it: the trace and the decision trail.
 
 ## Fitting EVE's limits

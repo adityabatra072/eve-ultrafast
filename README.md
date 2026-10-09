@@ -10,7 +10,7 @@ Give it one goal, with or without a start page. EVE picks an operation and an el
 
 <img src="docs/inspector.png" alt="The inspector on Google Flights: numbered elements on the live page, EVE's operation probabilities, and its ranking of the autocomplete suggestions" width="100%" />
 
-[How it was tested](docs/results.md) · [Design notes](docs/design.md) · [Read the loop](eve_ultrafast/agent.py)
+[How it was tested](docs/results.md) · [What people use browser agents for](docs/use-cases.md) · [Design notes](docs/design.md) · [Read the loop](eve_ultrafast/agent.py)
 
 ## The action space
 
@@ -24,7 +24,7 @@ Every observation produces a new element table:
 ...
 ```
 
-The operations are `CLICK`, `TYPE_TEXT`, `SELECT`, `SCROLL_UP`, `SCROLL_DOWN`, `WAIT`, `PRESS_ENTER`, `GO_BACK`, `NAVIGATE`, `DONE`, and `BLOCKED`. The agent offers only operations and targets the page supports: `PRESS_ENTER` right after typing, `GO_BACK` once it has left a page. `NAVIGATE` opens a different website: EVE decides when, and the text helper writes the address.
+The operations are `CLICK`, `TYPE_TEXT`, `SELECT`, `HOVER`, `UPLOAD`, `PRESS_KEY`, `SCROLL_UP`, `SCROLL_DOWN`, `WAIT`, `PRESS_ENTER`, `GO_BACK`, `NAVIGATE`, `SAVE_PDF`, `DONE`, and `BLOCKED`. The agent offers only operations and targets the page supports: `PRESS_ENTER` right after typing, `GO_BACK` once it has left a page, `UPLOAD` when you passed files, `HOVER` for menus and captions that only appear under the pointer. `NAVIGATE` opens a different website: EVE decides when, and the text helper writes the address. An open alert, confirm or prompt becomes the page, with OK and Cancel as its controls.
 
 ```text
                         one EVE request
@@ -89,7 +89,7 @@ with Agent(
         print(state["elapsed_ms"], state["status"])
 ```
 
-Run it with `uv run --env-file .env python your_script.py`. Pass `None` as the URL and the agent starts from a blank tab. The same policy handles other tasks:
+Run it with `uv run --env-file .env python your_script.py`. Pass `None` as the URL and the agent starts from a blank tab. `files=["resume.pdf"]` lets it attach those files, and nothing else on disk, to upload fields. When a run ends, `state["answer"]` holds the reply and `state["downloads"]` the files it saved. `agent.follow_up("...")` gives the same tab a second goal. The same policy handles other tasks:
 
 ```bash
 uv run --env-file .env python examples/run.py \
@@ -126,9 +126,9 @@ Every executed target resolves from an observed node. Model output never becomes
 
 ## Limits
 
-The agent works in one tab. Links that would open a new tab open in that tab instead, and a pop-up a click still opens gets loaded there and closed. Password fields work. The agent never reads a password back off the page, though one you put in the goal appears in the trace where it was typed. An element the browser refuses to operate (covered, disabled) is dropped for that page and EVE chooses again.
+The agent works in one tab. Links that would open a new tab open in that tab instead, and a pop-up a click still opens gets loaded there and closed. Same-origin frames and open shadow roots are read like the page; a cross-origin frame (an embedded form or map) can be opened by itself. Downloads land in `~/Downloads/eve-ultrafast`, and PDFs the tab opens are read for the answer. Password fields work. The agent never reads a password back off the page, though one you put in the goal appears in the trace where it was typed. An element the browser refuses to operate (covered, disabled) is dropped for that page and EVE chooses again.
 
-A `DONE` choice and its answer still deserve a check when it matters. The DOM reader handles common HTML and ARIA controls, not the full accessible-name spec. Shadow roots, frames, canvas, file uploads, nested scrolling, and arbitrary keyboard widgets stay outside it. `NAVIGATE` addresses come from the text helper's knowledge, so a guessed deep link can land on a missing page; the agent then works from there. Owned tabs share whichever Chrome profile you connect, including its logins.
+The answer step also checks the run: a `DONE` it judges incomplete goes back to work, and its answer still deserves a look when it matters. The DOM reader handles common HTML and ARIA controls, not the full accessible-name spec. Cross-origin frames are not read in place, closed shadow roots and canvas apps stay invisible, and drag-and-drop is not supported. `NAVIGATE` addresses come from the text helper's knowledge, so a guessed deep link can land on a missing page; the agent then works from there. Owned tabs share whichever Chrome profile you connect, including its logins.
 
 Google Flights sometimes answers an automated search with "Oops, something went wrong". EVE clicks Reload, which usually recovers. If Google keeps refusing, the run ends `blocked` and the flight check fails.
 
@@ -142,7 +142,7 @@ node --check eve_ultrafast/snapshot.js
 uv build
 ```
 
-Tests run offline. `uv run python scripts/check_guards.py` checks real controls in a local browser without model calls. `uv run python scripts/live_suite.py` runs 33 tasks on public websites (shopping, search, reference, docs, GitHub, news, video, forms, login, a to-do app) and checks each result on its own; pass task names to run a few. Live examples, the suite, `scripts/smoke.py`, and the recording scripts make paid API calls. Credentials and raw traces stay out of git.
+Tests run offline. `uv run python scripts/check_guards.py` checks real controls in a local browser without model calls. `uv run python scripts/live_suite.py` runs 68 tasks on public websites, drawn from the use cases in [use-cases.md](docs/use-cases.md), and checks each result on its own; pass task names to run a few, and `-n 3` to repeat them. Live examples, the suite, `scripts/smoke.py`, and the recording scripts make paid API calls. Credentials and raw traces stay out of git.
 
 ---
 
