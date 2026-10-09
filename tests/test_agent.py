@@ -503,3 +503,50 @@ def test_navigation_during_prediction_reobserves_without_action(runner):
     assert runner.state["status"] == "ready"
     assert runner.state["decision"] is None
     runner.state["browser"].act.assert_not_called()
+
+
+@pytest.fixture
+def harness(monkeypatch, tmp_path):
+    import eve_ultrafast.browser as browser
+
+    for name in ("BU_CDP_URL", "BU_CDP_WS", "BU_BROWSER_ID", "EVE_HEADLESS"):
+        # setenv first so the variable connect() writes is removed again after the test.
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
+    monkeypatch.setattr(browser, "PROFILES", [])
+    monkeypatch.setattr(browser, "CHROME_PROFILE", tmp_path / "chrome")
+    monkeypatch.setattr(browser, "ensure_daemon", Mock())
+    monkeypatch.setattr(browser.subprocess, "Popen", Mock())
+    return browser
+
+
+def test_explicit_cdp_url_is_used_as_is(harness, monkeypatch):
+    monkeypatch.setenv("BU_CDP_URL", "http://127.0.0.1:9999")
+    assert harness.connect() is False
+    harness.subprocess.Popen.assert_not_called()
+    harness.ensure_daemon.assert_called_once()
+
+
+def test_everyday_chrome_with_debugging_on_is_used(harness, monkeypatch):
+    monkeypatch.setattr(harness, "debuggable_profile", lambda: True)
+    assert harness.connect() is False
+    harness.subprocess.Popen.assert_not_called()
+    assert "BU_CDP_URL" not in harness.os.environ
+
+
+def test_dedicated_chrome_starts_when_nothing_is_debuggable(harness, monkeypatch):
+    ports = iter([False, False, True])
+    monkeypatch.setattr(harness, "listening", lambda _port: next(ports))
+    monkeypatch.setattr(harness, "CHROME_BINARIES", (harness.sys.executable,))
+    assert harness.connect() is True
+    command = harness.subprocess.Popen.call_args.args[0]
+    assert f"--remote-debugging-port={harness.CHROME_PORT}" in command
+    assert f"--user-data-dir={harness.CHROME_PROFILE}" in command
+    assert harness.os.environ["BU_CDP_URL"] == f"http://127.0.0.1:{harness.CHROME_PORT}"
+    harness.ensure_daemon.assert_called_once()
+
+
+def test_running_dedicated_chrome_is_reused(harness, monkeypatch):
+    monkeypatch.setattr(harness, "listening", lambda _port: True)
+    assert harness.connect() is True
+    harness.subprocess.Popen.assert_not_called()

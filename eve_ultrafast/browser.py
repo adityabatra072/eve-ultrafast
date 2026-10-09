@@ -2,25 +2,94 @@
 
 import hashlib
 import json
+import os
+import shutil
+import socket
+import subprocess
 import sys
 import time
 from pathlib import Path
 
 from browser_harness.admin import ensure_daemon
+from browser_harness.daemon import PROFILES
 from browser_harness.helpers import cdp
 
 # Atomically read visible content and controls, preserving actual DOM node identity.
 READ_STATE = Path(__file__).with_name("snapshot.js").read_text()
 MARKER = f"(() => {{ const state={READ_STATE}; return state?.marker ?? null; }})()"
 
+CHROME_PORT = int(os.environ.get("EVE_CHROME_PORT", "9333"))
+CHROME_PROFILE = Path.home() / ".cache" / "eve-ultrafast" / "chrome"
+CHROME_BINARIES = (
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    "google-chrome",
+    "google-chrome-stable",
+    "chromium",
+    "chromium-browser",
+)
+
+
 class StalePage(ValueError):
     """A decision no longer refers to the observed page."""
 
 
+def listening(port):
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=0.5).close()
+        return True
+    except OSError:
+        return False
+
+
+def debuggable_profile():
+    """True when an everyday browser profile already has remote debugging on."""
+    for base in PROFILES:
+        try:
+            port = int((Path(base) / "DevToolsActivePort").read_text().splitlines()[0])
+        except (OSError, ValueError, IndexError):
+            continue
+        if listening(port):
+            return True
+    return False
+
+
+def connect():
+    """Use BU_CDP_URL, then a browser with remote debugging on, then a dedicated Chrome we start.
+
+    Returns True when the agent owns the browser window, so its tab can come to the front."""
+    if os.environ.get("BU_CDP_URL") or os.environ.get("BU_CDP_WS") or os.environ.get("BU_BROWSER_ID"):
+        ensure_daemon()
+        return False
+    if debuggable_profile():
+        ensure_daemon()
+        return False
+    if not listening(CHROME_PORT):
+        binary = next((b for b in CHROME_BINARIES if Path(b).exists() or shutil.which(b)), None)
+        if not binary:
+            raise RuntimeError("Chrome not found. Install Chrome or set BU_CDP_URL to a browser with remote debugging.")
+        CHROME_PROFILE.mkdir(parents=True, exist_ok=True)
+        flags = ["--headless=new"] if os.environ.get("EVE_HEADLESS") == "1" else []
+        subprocess.Popen(
+            [binary, f"--remote-debugging-port={CHROME_PORT}", f"--user-data-dir={CHROME_PROFILE}",
+             "--no-first-run", "--no-default-browser-check", *flags, "about:blank"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+        )
+        deadline = time.monotonic() + 20
+        while not listening(CHROME_PORT):
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"Chrome did not open its debugging port {CHROME_PORT}.")
+            time.sleep(0.1)
+    os.environ["BU_CDP_URL"] = f"http://127.0.0.1:{CHROME_PORT}"
+    ensure_daemon()
+    return True
+
+
 class Browser:
     def __init__(self, url):
-        ensure_daemon()
-        self.target = cdp("Target.createTarget", url="about:blank", background=True)["targetId"]
+        owned = connect()
+        # In someone's everyday Chrome the tab stays in the background; in our own window it comes forward.
+        self.target = cdp("Target.createTarget", url="about:blank", background=not owned)["targetId"]
         self.session = cdp("Target.attachToTarget", targetId=self.target, flatten=True)["sessionId"]
         self.call("Emulation.setDeviceMetricsOverride", width=1120, height=780, deviceScaleFactor=1, mobile=False)
         # Keep rAF/menus rendering in an owned background tab, without activating the user's Chrome tab.

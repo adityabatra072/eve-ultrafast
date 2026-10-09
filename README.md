@@ -71,13 +71,7 @@ The agent reads the key `wally account login` saved. To use a key directly, `cp 
 
 Open **http://127.0.0.1:8766** and click **Start demo → Run automatically**. The inspector shows numbered elements, operation probabilities, target probabilities, and executed actions. **Choose next** pauses before execution.
 
-Chrome connects through [Browser Harness](https://github.com/browser-use/browser-harness), installed by `uv sync`. Run `uv run browser-harness --doctor` if it needs connecting, and allow remote debugging in Chrome when prompted. To keep the agent out of your everyday profile, start a separate Chrome and point the harness at it:
-
-```bash
-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
-  --remote-debugging-port=9333 --user-data-dir="$HOME/.eve-chrome"
-echo BU_CDP_URL=http://127.0.0.1:9333 >> .env
-```
+Chrome connects through [Browser Harness](https://github.com/browser-use/browser-harness), installed by `uv sync`. If one of your browsers already has remote debugging on (chrome://inspect → "Allow remote debugging"), the agent works in a background tab there. Otherwise it starts its own Chrome with a separate profile in `~/.cache/eve-ultrafast/chrome` on port 9333 and reuses it on later runs. Set `EVE_HEADLESS=1` to keep that window hidden, or `BU_CDP_URL` to use any other browser with a debugging port.
 
 The text helper takes any OpenAI-compatible endpoint. Set `TEXT_MODEL`, `TEXT_MODEL_BASE_URL`, and `TEXT_MODEL_API_KEY` to swap it.
 
