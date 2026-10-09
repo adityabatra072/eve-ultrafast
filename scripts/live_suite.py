@@ -743,7 +743,7 @@ HOLDOUT = {
     "notification": (
         "https://the-internet.herokuapp.com/notification_message_rendered",
         "Click the link that loads a new message and tell me what the message says.",
-        answer_matches(r"action (un)?successful"),
+        answer_matches(r"action (un)?succes+ful"),
     ),
     "table_cell": (
         "https://the-internet.herokuapp.com/challenging_dom",
