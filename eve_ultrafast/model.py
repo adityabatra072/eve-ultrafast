@@ -327,7 +327,7 @@ def field_text(context):
     if not key:
         raise ValueError("TYPE_TEXT needs RUNANYWHERE_API_KEY; no text is hardcoded or guessed by the executor.")
     base = os.environ.get("TEXT_MODEL_BASE_URL", API_BASE).rstrip("/")
-    model = os.environ.get("TEXT_MODEL", "glm-5.3-flash")
+    model = os.environ.get("TEXT_MODEL", "deepseek-v4.1-flash")
     # Wally models run at their default reasoning. Other providers can be told to skip or limit it.
     effort = os.environ.get("TEXT_MODEL_REASONING")
     reasoning = {}

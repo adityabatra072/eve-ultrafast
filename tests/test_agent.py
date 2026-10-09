@@ -321,7 +321,7 @@ def test_text_helper_defaults_to_wally_without_reasoning_flags(monkeypatch):
     assert model.field_text({"goal": "Fly to London"})[0] == "London"
     url, key, body = post.call_args.args
     assert url == "https://inference.runanywhere.ai/v1/chat/completions" and key == "ra-key"
-    assert body["model"] == "glm-5.3-flash" and "reasoning" not in body
+    assert body["model"] == "deepseek-v4.1-flash" and "reasoning" not in body
 
 
 def test_quoted_task_text_still_uses_the_llm(monkeypatch):

@@ -4,7 +4,7 @@
 
 **A browser agent with a dynamic, indexed action space, running on EVE.**
 
-This is a fork of Browser Use's [jev-ultrafast](https://github.com/browser-use/jev-ultrafast). The loop is theirs. The decisions now come from [EVE](https://runwally.com), RunAnywhere's Jev-class decision model on Wally, built on Perplexity's open [pplx-decider-v1-27b](https://huggingface.co/perplexity-ai/pplx-decider-v1-27b). When the operation is `TYPE_TEXT`, GLM-5.3 Flash on Wally writes the text. One RunAnywhere key covers both.
+This is a fork of Browser Use's [jev-ultrafast](https://github.com/browser-use/jev-ultrafast). The loop is theirs. The decisions now come from [EVE](https://runwally.com), RunAnywhere's Jev-class decision model on Wally, built on Perplexity's open [pplx-decider-v1-27b](https://huggingface.co/perplexity-ai/pplx-decider-v1-27b). When the operation is `TYPE_TEXT`, DeepSeek V4.1 Flash on Wally writes the text. One RunAnywhere key covers both.
 
 Give it one goal. EVE picks an operation and an element and puts a probability on every option.
 
@@ -39,7 +39,7 @@ page → element table → operation                 │
                     CLICK [7] ─────┤──→ browser
                 TYPE_TEXT [3] ─────┘
                           ↓
-                 GLM-5.3 Flash → text → browser
+           DeepSeek V4.1 Flash → text → browser
 ```
 
 Target questions are speculative. If EVE picks `CLICK`, only `click_target` can execute. Each target head holds only compatible elements, and native dropdown choices carry an observed element/option index.
