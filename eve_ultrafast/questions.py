@@ -10,6 +10,8 @@ NEXT_ACTION = [
     "Set every requested filter/control; a matching result alone does not prove a requested filter was set.",
     "Do not toggle a checkbox, switch, or radio already in the requested state.",
     "Prefer regular results over ones marked Sponsored or Ad unless the goal asks for them.",
+    "Stay inside the place the goal names (a repository, a store, a section of a site); do not follow links to a "
+    "person's profile or another project unless the goal asks for it.",
     "Files in files_not_attached must be attached with UPLOAD before any Upload or Submit click.",
     "A slider, date or time field takes its value through TYPE_TEXT.",
     "Typing into a search field does not apply it. Fields in typed_not_yet_submitted (typed text, picked dates, "
