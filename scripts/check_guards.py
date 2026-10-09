@@ -1,5 +1,6 @@
 """Local-browser freshness/execution regressions. No model calls or external websites."""
 
+import time
 from urllib.parse import quote
 
 from eve_ultrafast.browser import Browser, StalePage
@@ -143,7 +144,90 @@ def main():
     finally:
         browser.close()
     print("\n".join(passed))
+    capabilities(passed)
     print(f"PASS: {len(passed)} browser guard checks; no model calls")
+
+
+CAPABILITIES = """<!doctype html><title>Capabilities</title>
+<style>.figure .figcaption{display:none}.figure:hover .figcaption{display:block}body{margin:20px}</style>
+<iframe id="inner" style="width:300px;height:80px"
+  srcdoc="<button onclick='parent.frameClicks=(parent.frameClicks||0)+1'>Inside frame</button>"></iframe>
+<div class="figure"><img alt="Profile one" width="80" height="60"
+  src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='60'/%3E">
+  <div class="figcaption"><a href="#user1">View profile</a></div></div>
+<input type="file" id="file" aria-label="Resume">
+<input type="date" id="date" aria-label="Departure">
+<input type="range" id="range" aria-label="Volume" min="0" max="50">
+<a href="data:text/plain,eve" download="eve-guard-download.txt">Download notes</a>
+<iframe title="Example" src="https://example.com/" style="width:320px;height:160px"></iframe>
+<table><tr><th style="cursor:pointer" onclick="window.sorted=1">Due</th></tr></table>
+<img alt="Avatar" width="30" height="30"><img alt="Avatar" width="30" height="30">"""
+
+
+def capabilities(passed):
+    import os
+    import tempfile
+
+    from eve_ultrafast.browser import DOWNLOADS
+
+    browser = Browser("data:text/html," + quote(CAPABILITIES))
+    try:
+        time.sleep(1)
+        page = browser.observe(screenshot=False)
+        inside = next(a for a in page["actions"] if a["label"] == "Inside frame")
+        browser.act(inside, page)
+        assert browser.evaluate("window.frameClicks") == 1
+        passed.append("a button inside a same-origin frame is clicked")
+
+        page = browser.observe(screenshot=False)
+        hover = next(a for a in page["actions"] if a["kind"] == "hover")
+        browser.act(hover, page)
+        page = browser.observe(screenshot=False)
+        assert any(a["label"] == "View profile" for a in page["actions"])
+        passed.append("hovering reveals a hidden caption link")
+
+        upload = next(a for a in page["actions"] if a["kind"] == "file")
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as handle:
+            handle.write("resume")
+        browser.act({**upload, "kind": "upload", "value": handle.name}, page)
+        assert browser.evaluate("document.querySelector('#file').files[0].name") == os.path.basename(handle.name)
+        os.unlink(handle.name)
+        passed.append("an allowed file is attached to a file input")
+
+        page = browser.observe(screenshot=False)
+        date = next(a for a in page["actions"] if a["kind"] == "fill" and a.get("input_type") == "date")
+        browser.act(date, page, text="2026-11-20")
+        assert browser.evaluate("document.querySelector('#date').value") == "2026-11-20"
+        page = browser.observe(screenshot=False)
+        slider = next(a for a in page["actions"] if a["kind"] == "fill" and a.get("input_type") == "range")
+        assert slider["max"] == "50"
+        browser.act(slider, page, text="30")
+        assert browser.evaluate("document.querySelector('#range').value") == "30"
+        passed.append("date and slider inputs take formatted values")
+
+        page = browser.observe(screenshot=False)
+        link = next(a for a in page["actions"] if a["label"] == "Download notes")
+        target = DOWNLOADS / "eve-guard-download.txt"
+        target.unlink(missing_ok=True)
+        result = browser.act(link, page)
+        assert result.get("downloaded") == ["eve-guard-download.txt"] and target.read_text() == "eve", result
+        target.unlink()
+        passed.append("a download is saved and reported")
+
+        page = browser.observe(screenshot=False)
+        header = next(a for a in page["actions"] if a["label"] == "Due")
+        browser.act(header, page)
+        assert browser.evaluate("window.sorted") == 1
+        passed.append("a header clickable only by script is offered and clicked")
+
+        page = browser.observe(screenshot=False)
+        frame = next(a for a in page["actions"] if a["kind"] == "frame")
+        assert frame["value"] == "https://example.com/"
+        browser.act(frame, page)
+        assert browser.evaluate("location.href") == "https://example.com/"
+        passed.append("a cross-origin embedded page opens by itself")
+    finally:
+        browser.close()
 
 
 if __name__ == "__main__":

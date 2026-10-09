@@ -6,6 +6,7 @@ uv run python scripts/live_suite.py amazon_sort -n 3
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -39,6 +40,23 @@ def hn_rank(rank):
     page = urlopen("https://news.ycombinator.com/", timeout=20).read().decode()
     ids = re.findall(r'class="athing submission" id="(\d+)"', page)
     return set(ids[max(0, rank - 2) : rank + 1])
+
+
+HELLO = str(Path(__file__).with_name("fixtures") / "hello.txt")
+
+
+def next_month():
+    today = datetime.now()
+    return today.month % 12 + 1
+
+
+def show_titles(count):
+    """The current Show HN titles, from HN's own API, at check time."""
+    ids = json.loads(urlopen("https://hacker-news.firebaseio.com/v0/showstories.json", timeout=20).read())[:count]
+    items = [
+        json.loads(urlopen(f"https://hacker-news.firebaseio.com/v0/item/{i}.json", timeout=20).read()) for i in ids
+    ]
+    return [item.get("title", "") for item in items]
 
 
 def both(*checks):
@@ -189,6 +207,195 @@ TASKS = {
         "What population does this page give for India?",
         answer_matches(r"1[.,]\d|billion|\d{3},\d{3},\d{3}"),
     ),
+    # Adapted from Browser Use's examples, Online-Mind2Web, WebVoyager and Browser Harness skills (docs/results.md).
+    "upload": (
+        "https://the-internet.herokuapp.com/upload",
+        "Upload the file hello.txt and submit it.",
+        has("file uploaded", "hello.txt"),
+        {"files": [HELLO]},
+    ),
+    "upload_in_frame": (
+        "https://www.w3schools.com/tags/tryit.asp?filename=tryhtml5_input_type_file",
+        "In the result frame on the right, choose the file hello.txt and submit the form.",
+        has("myfile=hello.txt"),
+        {"files": [HELLO]},
+    ),
+    "hover_profile": (
+        "https://the-internet.herokuapp.com/hovers",
+        "Hover over the third avatar, tell me the user's name, then open their profile.",
+        # The site's profile pages are 404s by design, so opening one is checked from the actions taken.
+        both(answer_matches(r"user3"), lambda r: any("view profile" in a.lower() for a in r["actions"])),
+    ),
+    "menu_download": (
+        "https://the-internet.herokuapp.com/jqueryui/menu",
+        "Use the menu to go to Enabled, then Downloads, then PDF, and download the PDF.",
+        lambda r: any(name.lower().endswith(".pdf") for name in r["downloads"]),
+    ),
+    "new_window": (
+        "https://the-internet.herokuapp.com/windows",
+        "Click the link that opens a new window and tell me the heading of the page that opens.",
+        answer_matches(r"new window"),
+    ),
+    "births_three_pages": (
+        None,
+        "Look up the birth years of Elon Musk, Sam Altman and Steve Jobs on Wikipedia.",
+        both(answer_matches(r"1971"), answer_matches(r"1985"), answer_matches(r"1955")),
+    ),
+    "nested_frames": (
+        "https://the-internet.herokuapp.com/nested_frames",
+        "What text is shown in the middle frame at the top?",
+        answer_matches(r"middle"),
+    ),
+    "form_in_frame": (
+        "https://www.w3schools.com/html/tryit.asp?filename=tryhtml_form_submit",
+        "In the result frame, set the first name to Asha and the last name to Rao, then submit.",
+        has("fname=asha", "lname=rao"),
+    ),
+    "datepicker_frame": (
+        "https://jqueryui.com/datepicker/",
+        "In the demo, open the date picker and pick the 15th of next month.",
+        lambda r: f"{next_month():02d}/15/" in r["values"],
+    ),
+    "booking_goa": (
+        "https://www.booking.com/",
+        "Search for stays in Goa for 2 adults in 1 room, checking in on 20 November 2026 and checking out on "
+        "22 November 2026.",
+        url_has("checkin=2026-11-20", "checkout=2026-11-22"),
+    ),
+    "slider": (
+        "https://the-internet.herokuapp.com/horizontal_slider",
+        "Set the slider to 3.5.",
+        lambda r: re.search(r"\b3\.5\b", r["text"]) is not None,
+    ),
+    "dependent_dropdowns": (
+        "https://quotes.toscrape.com/search.aspx",
+        "Search for quotes by Jane Austen with the tag humor.",
+        has("the person, be it gentleman or lady"),
+    ),
+    "infinite_scroll": (
+        "https://quotes.toscrape.com/scroll",
+        "Load at least 30 quotes, then tell me who wrote quote number 25 and quote number 30.",
+        both(answer_matches(r"jim henson"), answer_matches(r"bob marley")),
+    ),
+    "table_sort": (
+        "https://the-internet.herokuapp.com/tables",
+        "Sort the first table by Due from largest to smallest and tell me who owes the most.",
+        answer_matches(r"jason doe"),
+    ),
+    "books_travel": (
+        "https://books.toscrape.com",
+        "What is the cheapest book in the Travel category, and what does it cost?",
+        # The listing itself truncates the title to "The Road to Little ...".
+        both(answer_matches(r"road to little"), answer_matches(r"23\.21")),
+    ),
+    "quotes_follow_up": (
+        "https://quotes.toscrape.com",
+        "List the first 5 quotes on the page with their authors.",
+        both(answer_matches(r"einstein"), answer_matches(r"rowling"), answer_matches(r"austen")),
+        {
+            "follow_up": (
+                "Go to the next page and tell me who wrote the first quote there.",
+                both(answer_matches(r"monroe"), url_has("/page/2/")),
+            )
+        },
+    ),
+    "pizza_time": (
+        "https://httpbin.org/forms/post",
+        "Order a medium pizza with cheese for John Doe, phone 555-123-4567, email john.doe@example.com, "
+        "delivery time 19:30. Then submit the order.",
+        has('"custname": "John Doe"', '"size": "medium"', '"delivery": "19:30"'),
+    ),
+    "js_prompt": (
+        "https://the-internet.herokuapp.com/javascript_alerts",
+        "Click the JS Prompt button, type harness into the prompt and accept it.",
+        has("you entered: harness"),
+    ),
+    "key_escape": (
+        "https://the-internet.herokuapp.com/key_presses",
+        "Press the Escape key.",
+        has("you entered: escape"),
+    ),
+    "shadow_dom": (
+        "https://the-internet.herokuapp.com/shadowdom",
+        "What text is shown inside the shadow DOM on this page?",
+        answer_matches(r"different text"),
+    ),
+    "cookie_banner": (
+        "https://www.cookiebot.com/en/",
+        "Decline the cookie banner, keeping only necessary cookies, then tell me the page's main heading.",
+        lambda r: "marketing:false" in r["cookies"].replace("%3A", ":").replace(" ", ""),
+    ),
+    "pdf_page3": (
+        "https://arxiv.org/pdf/1706.03762",
+        "What is on page 3 of this paper?",
+        answer_matches(r"transformer|encoder"),
+    ),
+    "save_pdf": (
+        "https://en.wikipedia.org/wiki/Web_browser",
+        "Save this article as a PDF.",
+        lambda r: any(name.lower().endswith(".pdf") for name in r["downloads"]),
+    ),
+    "scroll_sentence": (
+        "https://en.wikipedia.org/wiki/Internet",
+        "Find the sentence that starts with 'The vast majority of computer' and tell me how it ends.",
+        answer_matches(r"monitoring of data and traffic"),
+    ),
+    "arxiv_withdraw": (
+        None,
+        "On arXiv's help pages, find out how to withdraw an article that has not been announced yet.",
+        url_has("arxiv.org/help/withdraw"),
+    ),
+    "github_first_commit": (
+        "https://github.com/facebookresearch/sam2",
+        "Find the first commit by NielsRogge in this repository and tell me its message.",
+        answer_matches(r"first draft"),
+    ),
+    "osm_coordinates": (
+        "https://www.openstreetmap.org",
+        "Search for India Gate, New Delhi and tell me its coordinates.",
+        both(answer_matches(r"28\.6[01]"), answer_matches(r"77\.2[23]")),
+    ),
+    "bmi": (
+        "https://www.calculator.net/bmi-calculator.html",
+        "Using metric units, calculate the BMI of a 30-year-old male who is 175 cm tall and weighs 70 kg.",
+        answer_matches(r"22\.9"),
+    ),
+    "hn_show": (
+        "https://news.ycombinator.com/show",
+        "Give me the first 5 Show HN posts with their points.",
+        lambda r: sum(t.lower()[:25] in (r["answer"] or "").lower() for t in show_titles(5)) >= 3,
+    ),
+    "demoblaze_cart": (
+        "https://www.demoblaze.com",
+        "Add the Sony vaio i5 to the cart, then open the cart.",
+        both(url_has("cart.html"), has("sony vaio i5")),
+    ),
+    "webscraper_last": (
+        "https://webscraper.io/test-sites/e-commerce/static/computers/laptops",
+        "Go to the last page of laptops and tell me the name and price of the last laptop listed.",
+        both(answer_matches(r"rog strix|gl702vm"), answer_matches(r"1,?399")),
+    ),
+    "stackoverflow_question": (
+        None,
+        "On Stack Overflow, open the question 'How do I undo the most recent local commits in Git?' and tell me "
+        "the score of the accepted answer.",
+        both(url_has("stackoverflow.com/questions/"), answer_matches(r"\d")),
+    ),
+    "timeanddate": (
+        None,
+        "What time is it now in Tokyo according to timeanddate.com?",
+        answer_matches(r"\d{1,2}:\d{2}"),
+    ),
+    "jobs_search": (
+        "https://www.python.org/jobs/",
+        "Find a remote job on this job board and open its listing.",
+        lambda r: re.search(r"python\.org/jobs/\d+", r["url"]) is not None,
+    ),
+    "places_nearby": (
+        "https://www.openstreetmap.org",
+        "Search for cafes near Connaught Place, New Delhi and tell me the name of one of them.",
+        both(url_has("openstreetmap.org"), answer_matches(r"caf|coffee|\w{3,}")),
+    ),
     "flights": (
         "https://www.google.com/travel/flights?hl=en",
         "Find one-way flights from Zurich to London on November 20, 2026, for one adult in economy. "
@@ -200,43 +407,80 @@ TASKS = {
 
 def fresh_site(start):
     """Forget what earlier runs left on the start site (to-dos, logins), so each run starts the same."""
+    connect()
+    # Cookies set on a parent domain (consent banners) survive per-origin clearing, so clear them all.
+    cdp("Storage.clearCookies")
     if start:
         parts = urlsplit(start)
-        connect()
         cdp("Storage.clearDataForOrigin", origin=f"{parts.scheme}://{parts.netloc}", storageTypes="all")
 
 
-def run(name, start, goal, check):
-    error, state, text, controls = None, None, "", ""
+# Field values in the page and its same-origin frames, for checks a form's text alone cannot show.
+VALUES = """(() => {
+  const docs=[document];
+  for (const f of document.querySelectorAll('iframe,frame')) {
+    try { if (f.contentDocument) docs.push(f.contentDocument); } catch {}
+  }
+  return docs.flatMap(d => [...d.querySelectorAll('input,select,textarea')].map(e => e.value)).join(' | ');
+})()"""
+
+
+def finished(agent, state, error):
+    """Everything the checks read about how a run ended."""
+    text = controls = values = cookies = ""
+    try:
+        text = agent.browser.full_text(read_pdf=False)
+        controls = " ".join(a["label"] for a in agent.browser.observe(screenshot=False)["actions"])
+        values = agent.browser.evaluate(VALUES) or ""
+        cookies = agent.browser.evaluate("document.cookie") or ""
+    except Exception:  # noqa: BLE001 - a page that will not answer still gets judged on what is known
+        pass
+    return {
+        "url": state["page"]["url"],
+        "status": state["status"],
+        "stop_reason": state.get("stop_reason"),
+        "answer": state.get("answer"),
+        "downloads": state.get("downloads", []),
+        "text": text[:30000],
+        "controls": controls[:20000],
+        "values": values[:5000],
+        "cookies": cookies[:3000],
+        "error": error,
+        "actions": [f"{h['kind']}: {(h['text'] or h['action'])[:60]}" for h in state.get("history", [])],
+        "decisions": len(state.get("decisions", [])),
+    }
+
+
+def run(name, start, goal, check, options=None):
+    options = options or {}
     started = time.perf_counter()
     fresh_site(start)
+    result = {"task": name, "url": "", "status": "error", "answer": None, "error": None, "actions": []}
     try:
-        with Agent(start, goal) as agent:
+        with Agent(start, goal, files=options.get("files", ())) as agent:
+            error, state = None, None
             try:
                 for state in agent.run():
                     pass
             except Exception as exc:  # noqa: BLE001 - the suite records every failure and keeps going
                 error = f"{type(exc).__name__}: {exc}"
-            state = agent.snapshot()
-            try:
-                text = agent.browser.evaluate("document.body?.innerText || ''") or ""
-                controls = " ".join(a["label"] for a in agent.browser.observe(screenshot=False)["actions"])
-            except Exception:  # noqa: BLE001
-                pass
+            result.update(finished(agent, agent.snapshot(), error))
+            passed = not error and result["status"] == "done" and check(result)
+            if passed and "follow_up" in options:
+                # The same tab gets a second goal, as a person would ask a follow-up question.
+                follow, second = options["follow_up"]
+                agent.follow_up(follow)
+                try:
+                    for state in agent.run():
+                        pass
+                except Exception as exc:  # noqa: BLE001
+                    error = f"{type(exc).__name__}: {exc}"
+                result.update(finished(agent, agent.snapshot(), error))
+                result["follow_up_answer"] = result["answer"]
+                passed = not error and result["status"] == "done" and second(result)
+            result["passed"] = bool(passed)
     except Exception as exc:  # noqa: BLE001
-        error = f"{type(exc).__name__}: {exc}"
-    result = {
-        "task": name,
-        "url": state["page"]["url"] if state else "",
-        "status": state["status"] if state else "error",
-        "answer": state.get("answer") if state else None,
-        "text": text[:20000],
-        "controls": controls[:20000],
-        "error": error,
-    }
-    result["passed"] = bool(state) and not error and result["status"] == "done" and check(result)
-    result["actions"] = [f"{h['kind']}: {(h['text'] or h['action'])[:60]}" for h in (state or {}).get("history", [])]
-    result["decisions"] = len((state or {}).get("decisions", []))
+        result.update(error=f"{type(exc).__name__}: {exc}", passed=False)
     result["seconds"] = round(time.perf_counter() - started, 1)
     return result
 
@@ -248,7 +492,8 @@ def main():
     args = parser.parse_args()
     load_environment()
     names = args.tasks or list(TASKS)
-    folder = Path("artifacts/live-suite") / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    folder = Path("artifacts/live-suite") / f"{stamp}-{os.getpid()}"
     folder.mkdir(parents=True, exist_ok=True)
     results = []
     for name in names:

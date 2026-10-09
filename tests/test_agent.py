@@ -348,6 +348,7 @@ def runner():
     a.screenshots = False
     a.pending_text = None
     a.unavailable = set()
+    a.files = []
     p = page()
     a.state = {
         "browser": Mock(fresh=Mock(return_value=True), observe=Mock(return_value=p)),
@@ -675,7 +676,7 @@ def test_refused_target_is_not_offered_again_on_that_page(runner, monkeypatch):
 
 def test_enter_is_offered_right_after_typing_and_back_after_leaving_a_page():
     page_now = {"url": "https://a.com/results"}
-    assert set(model.synthetic_operations(page_now, [])) == {"NAVIGATE"}
+    assert set(model.synthetic_operations(page_now, [])) == {"NAVIGATE", "SAVE_PDF"}
     typed = [{"kind": "fill", "action": "Search", "url": "https://a.com/results"}]
     assert "PRESS_ENTER" in model.synthetic_operations(page_now, typed)
     moved = [{"kind": "click", "action": "Next", "url": "https://a.com/"}, {"kind": "click", "url": "https://a.com/results"}]
@@ -699,7 +700,7 @@ def test_enter_and_back_use_cdp_only(monkeypatch, kind, calls):
 
 
 def test_done_reads_an_answer_off_the_final_page(runner, monkeypatch):
-    answer = ("Logitech G203, ₹1,495", {"model": "t", "latency_ms": 3})
+    answer = ({"answer": "Logitech G203, ₹1,495", "complete": True}, {"model": "t", "latency_ms": 3})
     monkeypatch.setattr(loop, "final_answer", Mock(return_value=answer))
     runner.state["decision"] = {**decision("DONE"), "operation": "DONE", "target": None, "probabilities": {"DONE": 1.0}}
     runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
@@ -716,7 +717,8 @@ def test_a_missing_answer_does_not_fail_the_run(runner, monkeypatch):
 
 
 def test_repeating_one_action_on_one_page_stops_with_an_answer(runner, monkeypatch):
-    monkeypatch.setattr(loop, "final_answer", Mock(return_value=("Saw the iPad page", {"model": "t", "latency_ms": 1})))
+    saw = ({"answer": "Saw the iPad page", "complete": False}, {"model": "t", "latency_ms": 1})
+    monkeypatch.setattr(loop, "final_answer", Mock(return_value=saw))
     page_now = runner.state["page"]
     for n in range(4):
         page_now["text"] = f"changed {n}"  # each click changes the page, so only the repeat guard can stop it
@@ -751,4 +753,80 @@ def test_a_slow_site_does_not_end_the_run(monkeypatch):
     monkeypatch.setattr(browser, "cdp", Mock(side_effect=TimeoutError("Page.navigate timed out")))
     result = browser_operation({"operation": "act", "session": "s", "action": {"id": "NAVIGATE", "kind": "navigate"},
                                 "text": "https://slow.example/"})
-    assert result == {"executed": "NAVIGATE"}
+    assert result["executed"] == "NAVIGATE"
+
+
+
+def test_a_premature_done_goes_back_to_work_with_what_is_missing(runner, monkeypatch):
+    verdict = ({"answer": "Only page 6 of 20", "complete": False, "missing": "open the last page"}, {"model": "t"})
+    monkeypatch.setattr(loop, "final_answer", Mock(return_value=verdict))
+    runner.rechecks = 0
+    for _ in range(3):
+        runner.state["decision"] = {**decision("DONE"), "operation": "DONE", "target": None,
+                                    "probabilities": {"DONE": 1.0}}
+        runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+        if runner.state["status"] == "done":
+            break
+    checks = [h for h in runner.state["history"] if h["kind"] == "check"]
+    assert len(checks) == 2 and "open the last page" in checks[0]["action"]
+    assert runner.state["status"] == "done"  # after two rechecks EVE's DONE stands
+
+
+def test_a_run_stopped_by_a_limit_is_done_when_the_answer_was_found(runner, monkeypatch):
+    found = ({"answer": "Jim Henson and Bob Marley", "complete": True}, {"model": "t"})
+    monkeypatch.setattr(loop, "final_answer", Mock(return_value=found))
+    runner.finish("blocked", runner.state["page"], "Scrolled 15 times in a row")
+    assert runner.state["status"] == "done" and runner.state["stop_reason"] == "Scrolled 15 times in a row"
+
+
+def test_answer_parses_complete_and_missing(monkeypatch):
+    monkeypatch.setenv("TEXT_MODEL_API_KEY", "test")
+    content = '{"answer": "Page 6 of 20", "complete": false, "missing": "go to page 20"}'
+    monkeypatch.setattr(model, "post_json", Mock(return_value={"choices": [{"message": {"content": content}}]}))
+    verdict, _ = model.final_answer("Last laptop?", {"url": "u", "title": "t", "text": "x"}, [])
+    assert verdict == {"answer": "Page 6 of 20", "complete": False, "missing": "go to page 20"}
+
+
+
+def test_long_pages_keep_the_passage_the_goal_quotes():
+    filler = "\n".join(f"Paragraph {i} about routers and cables." for i in range(3000))
+    text = "Internet\n" + filler + "\nThe vast majority of computer surveillance involves data.\n" + filler
+    kept = model.relevant(text, "Find the sentence that starts with 'The vast majority of computer'", 16000)
+    assert len(kept) <= 16000 + 200
+    assert kept.startswith("Internet") and "vast majority of computer surveillance" in kept
+
+
+def test_short_pages_pass_through_whole():
+    assert model.relevant("short page", "anything", 16000) == "short page"
+
+
+
+def test_a_page_too_long_for_eve_is_retried_smaller(monkeypatch):
+    p = many_links(40)
+    for i, a in enumerate(p["actions"]):
+        if a["kind"] == "click":  # controls such as WAIT have no position on the page
+            a["rect"] = {"x": 0, "y": 30 * i, "w": 10, "h": 10}
+    p["h"] = 600
+    sizes = []
+
+    def post(_url, _key, body):
+        sizes.append(body["state"]["elements"].count("\n") + 1)
+        if len(sizes) == 1:
+            raise model.TooLong("too long")
+        return {"model": "eve", "answers": {"operation": choice(body["questions"]["operation"]["criteria"], "WAIT")}}
+
+    monkeypatch.setenv("RUNANYWHERE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", post)
+    assert model.choose(p, "Wait", [])["choice"] == "wait"
+    assert sizes[1] < sizes[0]  # the retry dropped the links below the fold
+
+
+
+def test_an_action_that_changed_nothing_is_not_offered_again_on_the_same_page(runner, monkeypatch):
+    runner.state["decision"] = decision("e3")
+    runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})  # observe returns the same page
+    assert runner.state["history"][-1]["page_changed"] is False
+    seen = []
+    monkeypatch.setattr(loop, "choose", lambda p, _g, _h: seen.append(p) or decision("e1"))
+    runner.command("predict", {})
+    assert "e3" not in {a["id"] for a in seen[0]["actions"]}

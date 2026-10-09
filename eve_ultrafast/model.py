@@ -3,12 +3,14 @@
 import json
 import math
 import os
+import re
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
 
+from .browser import DOWNLOADS
 from .questions import ANSWER_VALUE, NEXT_ACTION, TARGET, TEXT_VALUE, URL_VALUE
 
 CLIENT = httpx.Client(http2=True, timeout=25)
@@ -23,6 +25,10 @@ SURE, ELSEWHERE = 0.8, 0.25
 
 
 WALLY_CREDENTIALS = Path.home() / ".config" / "wally" / "credentials.json"
+
+
+class TooLong(RuntimeError):
+    """EVE refused a question whose input passed its per-question token limit."""
 
 
 def api_key(required=True):
@@ -43,10 +49,16 @@ def post_json(url, key, body):
         try:
             response = CLIENT.post(url, json=body, headers={"Authorization": f"Bearer {key}"})
         except httpx.HTTPError:
+            # Model calls change nothing on the page, so a dropped connection is safe to retry.
+            if attempt < 2:
+                time.sleep(0.5 * 2**attempt)
+                continue
             raise RuntimeError("Model connection failed; no action executed.") from None
         if response.status_code in {429, 529, 503} and attempt < 2:
             time.sleep(0.5 * 2**attempt)
             continue
+        if response.status_code == 400 and "longer than" in response.text:
+            raise TooLong("Page too large for one question; no action executed.")
         if response.is_error:
             raise RuntimeError(f"Model provider returned HTTP {response.status_code}; no action executed.")
         return response.json()
@@ -85,7 +97,10 @@ def validate_choice(answer, ids):
 def action_space(actions):
     """One index per observed element; each operation has its own valid target choices."""
     elements, indices, targets, controls = [], {}, {}, {}
-    operations = {"click": "CLICK", "fill": "TYPE_TEXT", "select": "SELECT"}
+    operations = {
+        "click": "CLICK", "fill": "TYPE_TEXT", "select": "SELECT",
+        "hover": "HOVER", "upload": "UPLOAD", "key": "PRESS_KEY",
+    }
     for action in actions:
         kind = action["kind"]
         if kind not in operations:
@@ -96,8 +111,8 @@ def action_space(actions):
             index = str(len(elements) + 1)
             indices[node] = index
             element = {k: action[k] for k in ("role", "value", "checked", "selected", "expanded") if k in action}
-            element.update(index=index, label=action["label"].split(" → ")[0], operations=[])
-            if kind == "select":
+            element.update(index=index, label=action["label"].split(" → ")[0].split(" ← ")[0], operations=[])
+            if kind in {"select", "upload", "key"}:
                 element["value"] = action.get("current_value", "")
                 element["options"] = []
             elements.append(element)
@@ -108,7 +123,8 @@ def action_space(actions):
         if operation not in element["operations"]:
             element["operations"].append(operation)
         target = index
-        if kind == "select":
+        if kind in {"select", "upload", "key"}:
+            element.setdefault("options", [])
             target = f"{index}:{len(element['options']) + 1}"
             element["options"].append({"index": target, "label": action["label"], "value": action["value"]})
         group[target] = action
@@ -151,6 +167,8 @@ def history_text(history):
     for n, h in enumerate(history, 1):
         text = f" {json.dumps(h['text'], ensure_ascii=False)}" if h.get("text") else ""
         effect = " (no visible change)" if h.get("page_changed") is False else ""
+        if h.get("downloaded"):
+            effect += f" (downloaded {', '.join(h['downloaded'])})"
         lines.append(f"{n}. {h.get('kind')} {h.get('action')}{text}{effect}")
     return "\n".join(lines) or "none"
 
@@ -260,6 +278,8 @@ def pick_target(url, body, result, operation, candidates):
 
 # Operations the agent performs without a page element. The executor owns what each one does.
 SYNTHETIC = {
+    "SAVE_PDF": {"id": "SAVE_PDF", "kind": "pdf", "label": "Save the page as a PDF"},
+    "SAVE_FILE": {"id": "SAVE_FILE", "kind": "save_file", "label": "Save the open file"},
     "NAVIGATE": {"id": "NAVIGATE", "kind": "navigate", "label": "Open a web address"},
     "PRESS_ENTER": {"id": "PRESS_ENTER", "kind": "enter", "label": "Press Enter"},
     "GO_BACK": {"id": "GO_BACK", "kind": "back", "label": "Go back"},
@@ -274,16 +294,50 @@ def synthetic_operations(state, history):
     if any(h.get("url") not in (None, state["url"]) for h in history):
         operations["GO_BACK"] = "Return to the previous page."
     operations["NAVIGATE"] = "Open a different website by its address. A small LLM will write the URL from the goal."
+    operations["SAVE_PDF"] = "Save the current page as a PDF file, only when the goal asks for a PDF or a saved copy."
+    if state.get("pdf"):
+        operations["SAVE_FILE"] = "Download the PDF file this tab is showing to the downloads folder."
     return operations
 
 
+def trimmed(state, level):
+    """Smaller views of a page for EVE's per-question limit: first without controls below the fold,
+    then with less text and shorter labels."""
+    if level == 0:
+        return state
+    fold = state.get("h", 780)
+    actions = [a for a in state["actions"] if a.get("rect", {}).get("y", 0) < fold]
+    if level >= 2:
+        actions = [{**a, "label": a["label"][:60]} for a in actions]
+    return {**state, "actions": actions, "text": state["text"][: 6000 if level == 1 else 1500]}
+
+
 def choose(state, goal, history):
+    # Big pages (a full Hacker News front page) can pass EVE's per-question limit. Start small when the
+    # element list is obviously long, and shrink further if EVE still says the input is too long.
+    start = 1 if len(element_table(action_space(state["actions"])[0])) > 9000 else 0
+    for level in range(start, 3):
+        try:
+            return decide(trimmed(state, level), goal, history)
+        except TooLong:
+            if level == 2:
+                raise RuntimeError("Page is too large for EVE even after trimming; no action executed.") from None
+
+
+def decide(state, goal, history):
     elements, targets, controls = action_space(state["actions"])
     labels = {
         "CLICK": "Click an element, button, menu option, autocomplete suggestion, or calendar day.",
-        "TYPE_TEXT": "Enter or replace text in an editable field. A small LLM will supply the value from the goal.",
+        "TYPE_TEXT": "Enter or replace text or a value in an editable field (text box, date, time or slider). "
+        "A small LLM will supply the value from the goal.",
         "SELECT": "Select an observed dropdown value.",
+        "HOVER": "Move the pointer over an element to reveal a menu, caption or tooltip that is hidden until then.",
+        "UPLOAD": "Attach one of the files the user provided to a file input.",
+        "PRESS_KEY": "Press one keyboard key, such as Escape to close a popup or ArrowDown to move through a list.",
     }
+    files = sorted({Path(a["value"]).name for a in targets.get("UPLOAD", {}).values()})
+    if files:
+        labels["UPLOAD"] = f"Attach {', '.join(files)} (the user's file) to a file input that has no file yet."
     operations = {key: labels[key] for key in targets}
     operations.update({key: value["label"] for key, value in controls.items()})
     operations.update(synthetic_operations(state, history))
@@ -304,6 +358,7 @@ def choose(state, goal, history):
             "recent_actions": history_text(history[-10:]),
             "typed_not_yet_submitted": unsubmitted(history),
             "visited_pages": visited_pages(state["url"], history),
+            **({"files_not_attached": state["files_not_attached"]} if "files_not_attached" in state else {}),
         },
         "questions": questions,
     }
@@ -352,7 +407,7 @@ def choose(state, goal, history):
 def field_context(goal, action, page, history):
     return {
         "goal": goal,
-        "field": {k: action.get(k) for k in ("label", "role", "value")},
+        "field": {k: action[k] for k in ("label", "role", "value", "input_type", "min", "max", "step") if k in action},
         "page": {"title": page["title"], "text": page["text"][:6000]},
         "recent_actions": [{k: h.get(k) for k in ("action", "text")} for h in history[-6:]],
     }
@@ -399,10 +454,18 @@ def helper(system, context, field):
     meta = {"model": model, "latency_ms": latency_ms, "usage": result.get("usage", {})}
     try:
         output = json.loads(result["choices"][0]["message"]["content"])
+        if field is None:
+            # The answer: free text plus whether the goal is met and, if not, what is missing.
+            answer = output.get("answer")
+            if not isinstance(answer, str) or not answer.strip() or not isinstance(output.get("complete"), bool):
+                raise ValueError()
+            missing = output.get("missing")
+            return {"answer": answer.strip()[:3000], "complete": output["complete"],
+                    "missing": missing.strip()[:300] if isinstance(missing, str) else None}, meta
         value = output[field]
         if set(output) != {field} or not isinstance(value, str) or not value.strip() or len(value) > 2000:
             raise ValueError()
-    except (ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError, AttributeError):
         return None, meta
     return value, meta
 
@@ -414,17 +477,46 @@ def field_text(context):
     return value, meta
 
 
-def final_answer(goal, page, history, earlier=()):
+def relevant(text, goal, limit):
+    """Long pages keep their opening plus the passages that share the most words with the goal, in page order."""
+    if len(text) <= limit:
+        return text
+    quoted = [q.lower() for q in re.findall(r"['\"‘“]([^'\"’”]{6,})['\"’”]", goal)]
+    words = {w for w in re.findall(r"[a-z0-9]{4,}", goal.lower())}
+    chunks, current = [], ""
+    for line in text.split("\n"):
+        if len(current) + len(line) > 1500 and current:
+            chunks.append(current)
+            current = ""
+        current += line + "\n"
+    chunks.append(current)
+
+    def score(chunk):
+        lower = chunk.lower()
+        return 50 * sum(q[:60] in lower for q in quoted) + sum(w in lower for w in words)
+
+    keep, used = {0}, len(chunks[0])
+    for i in sorted(range(1, len(chunks)), key=lambda i: score(chunks[i]), reverse=True):
+        if used + len(chunks[i]) > limit:
+            continue
+        keep.add(i)
+        used += len(chunks[i])
+    return "\n…\n".join(chunks[i] for i in sorted(keep))
+
+
+def final_answer(goal, page, history, earlier=(), downloads=()):
     """What the user asked for, read off the final page and short excerpts of pages visited before it.
 
     Returns (answer or None, metadata)."""
     context = {
         "goal": goal,
-        "page": {"url": page["url"], "title": page["title"], "text": page["text"][:16000]},
-        "earlier_pages": [{"url": url, "text": text[:2500]} for url, text in earlier][-4:],
+        "page": {"url": page["url"], "title": page["title"], "text": relevant(page["text"], goal, 16000)},
+        "earlier_pages": [{"url": url, "text": relevant(text, goal, 4000)} for url, text in earlier][-5:],
+        "files_downloaded": [str(DOWNLOADS / name) for name in downloads],
         "recent_actions": [{k: h.get(k) for k in ("action", "text")} for h in history[-8:]],
     }
-    return helper(ANSWER_VALUE, context, "answer")
+    value, meta = helper(ANSWER_VALUE, context, None)
+    return value or {}, meta
 
 
 def page_url(context):
