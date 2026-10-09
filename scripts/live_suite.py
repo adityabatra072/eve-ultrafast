@@ -87,6 +87,31 @@ c.addEventListener('click', e => {
 </script>"""
 
 
+def first_author(page):
+    """Author of the first quote on a quotes.toscrape.com page, fetched at check time."""
+    html = urlopen(f"https://quotes.toscrape.com/page/{page}/", timeout=20).read().decode()
+    return re.search(r'class="author"[^>]*>([^<]+)', html).group(1)
+
+
+def first_prices(url, count):
+    html = urlopen(url, timeout=20).read().decode()
+    return re.findall(r'price_color">£([\d.]+)', html)[:count]
+
+
+def cheapest_tablet():
+    html = urlopen("https://webscraper.io/test-sites/e-commerce/allinone/computers/tablets", timeout=20).read().decode()
+    return min((p for p in re.findall(r"\$([\d.]+)", html) if "." in p), key=float)
+
+
+def in_answer(compute):
+    """The answer contains every value compute() returns at check time."""
+    def check(r):
+        values = compute()
+        values = [values] if isinstance(values, str) else values
+        return bool(r["answer"]) and all(v.lower() in r["answer"].lower() for v in values)
+    return check
+
+
 def both(*checks):
     return lambda r: all(c(r) for c in checks)
 
@@ -704,6 +729,99 @@ HOLDOUT = {
         "In the demo, type Ja into the field and pick Java from the suggestions.",
         lambda r: "Java" in r["values"].split(" | "),
     ),
+    # Third held-out batch, committed before its first run: page patterns the suite did not cover yet.
+    "checkboxes": (
+        "https://the-internet.herokuapp.com/checkboxes",
+        "Tick the first checkbox and untick the second one.",
+        lambda r: r["checked"] == "true,false",
+    ),
+    "enable_field": (
+        "https://the-internet.herokuapp.com/dynamic_controls",
+        "Enable the text field and type hello into it.",
+        lambda r: "hello" in r["values"].split(" | "),
+    ),
+    "notification": (
+        "https://the-internet.herokuapp.com/notification_message_rendered",
+        "Click the link that loads a new message and tell me what the message says.",
+        answer_matches(r"action (un)?successful"),
+    ),
+    "table_cell": (
+        "https://the-internet.herokuapp.com/challenging_dom",
+        "In the table, what is in the Diceret column of the row whose Lorem value is Iuvaret4?",
+        answer_matches(r"phaedrum4"),
+    ),
+    "wrong_password": (
+        "https://the-internet.herokuapp.com/login",
+        "Log in with username tomsmith and password wrongpass, and tell me what error the site shows.",
+        answer_matches(r"password is invalid"),
+    ),
+    "floating_menu": (
+        "https://the-internet.herokuapp.com/floating_menu",
+        "Scroll down the page, then click About in the floating menu.",
+        url_has("#about"),
+    ),
+    "demoqa_tabs": (
+        "https://demoqa.com/tabs",
+        "Open the Origin tab and tell me how its text begins.",
+        answer_matches(r"contrary to popular belief"),
+    ),
+    "demoqa_accordion": (
+        "https://demoqa.com/accordian",
+        "Expand the section 'Why do we use it?' and tell me how its text begins.",
+        answer_matches(r"long established fact"),
+    ),
+    "demoqa_modal": (
+        "https://demoqa.com/modal-dialogs",
+        "Open the small modal and tell me what it says.",
+        answer_matches(r"small modal"),
+    ),
+    "demoqa_textbox": (
+        "https://demoqa.com/text-box",
+        "Fill in the full name Ada Lovelace and the email ada@example.com, then submit the form.",
+        has("name:ada lovelace", "email:ada@example.com"),
+    ),
+    "demoqa_radio": ("https://demoqa.com/radio-button", "Select Impressive.", has("you have selected impressive")),
+    "quotes_page3": (
+        "https://quotes.toscrape.com",
+        "Go to page 3 of the quotes and tell me who said the first quote there.",
+        in_answer(lambda: first_author(3)),
+    ),
+    "mystery_prices": (
+        "https://books.toscrape.com",
+        "List the titles and prices of the first three books in the Mystery category.",
+        in_answer(lambda: first_prices(
+            "https://books.toscrape.com/catalogue/category/books/mystery_3/index.html", 3)),
+    ),
+    "cheapest_tablet": (
+        "https://webscraper.io/test-sites/e-commerce/allinone",
+        "Open the tablets category and tell me the price of the cheapest tablet.",
+        in_answer(cheapest_tablet),
+    ),
+    "wiki_no_results": (
+        "https://en.wikipedia.org",
+        "Search Wikipedia for qzxvbnmplk and tell me whether any article matches.",
+        answer_matches(r"\bno\b|not find|did not|didn't|does not|doesn't|zero|0 results"),
+    ),
+    "wiki_french": (
+        None,
+        "Open the English Wikipedia article on Paris, then switch to the French version of the article.",
+        url_has("fr.wikipedia.org"),
+    ),
+    "compare_population": (
+        None,
+        "Using Wikipedia, which country has more people, Norway or Sweden?",
+        answer_matches(r"sweden"),
+    ),
+    "requests_release": (
+        None,
+        "On PyPI, find the release history of the requests package and tell me in which year version 2.0.0 came out.",
+        answer_matches(r"2013"),
+    ),
+    "hn_profile": (
+        "https://news.ycombinator.com",
+        "Open the Hacker News profile of the user pg and tell me when the account was created.",
+        answer_matches(r"2006"),
+    ),
 }
 
 
@@ -726,14 +844,17 @@ VALUES = """(() => {
   return docs.flatMap(d => [...d.querySelectorAll('input,select,textarea')].map(e => e.value)).join(' | ');
 })()"""
 
+CHECKED = "[...document.querySelectorAll('input[type=checkbox]')].map(e => e.checked).join(',')"
+
 
 def finished(agent, state, error):
     """Everything the checks read about how a run ended."""
-    text = controls = values = cookies = ""
+    text = controls = values = cookies = checked = ""
     try:
         text = agent.browser.full_text(read_pdf=False)
         controls = " ".join(a["label"] for a in agent.browser.observe(screenshot=False)["actions"])
         values = agent.browser.evaluate(VALUES) or ""
+        checked = agent.browser.evaluate(CHECKED) or ""
         cookies = agent.browser.evaluate("document.cookie") or ""
     except Exception:  # noqa: BLE001 - a page that will not answer still gets judged on what is known
         pass
@@ -746,6 +867,7 @@ def finished(agent, state, error):
         "text": text[:30000],
         "controls": controls[:20000],
         "values": values[:5000],
+        "checked": checked,
         "cookies": cookies[:3000],
         "error": error,
         "actions": [f"{h['kind']}: {(h['text'] or h['action'])[:60]}" for h in state.get("history", [])],
