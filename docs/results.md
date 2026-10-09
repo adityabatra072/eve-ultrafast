@@ -15,7 +15,7 @@ After that run, three fixes followed (identical submit buttons told apart by the
 
 **Third held-out batch.** 19 more tasks, committed before their first run, for page patterns the suite had not covered: tabs, accordions, a modal, checkboxes, a field that starts disabled, a floating menu, a notification message, a cell in a table with no ids, a wrong-password error, a search with no results, paging, a list of items with prices, the cheapest item in a category, two countries compared across pages, switching an article's language, PyPI release history and a Hacker News profile. All 19 passed on their first run. The PyPI run had scrolled 15 times before answering, so the agent now asks the answer step every 4 scrolls whether the goal is already met; the same task then took 5 actions, and the scroll-heavy suite tasks still passed.
 
-Two guards also changed after the regression pass: a run now gives up after six actions in a row that change nothing, not three, because each one is already set aside and the next choice is a different one. That fixed the Google search miss (3 of 3 afterwards).
+One guard also changed after the regression pass: a run now gives up after six actions in a row that change nothing, not three, because each one is already set aside and the next choice is a different one. That fixed the Google search miss (3 of 3 afterwards).
 
 Pages that ask for human verification (Cloudflare, CAPTCHAs) are not solved by design; in these headless runs the agent stops and says so, and with a visible window it waits for a person. Wall-clock speed is left out: the runs went from a machine about 270 ms from Wally's gateway.
 
