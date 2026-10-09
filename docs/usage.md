@@ -87,7 +87,7 @@ It reads frames (embedded forms and players from other sites too), shadow DOM, d
 - **`blocked`, with a reason.** The run stops early when:
   - it found no way forward;
   - it repeated the same step four times on one page;
-  - three steps in a row changed nothing;
+  - six steps in a row changed nothing;
   - it scrolled 15 times in a row;
   - the site kept returning an error page;
   - a human-verification page never cleared;

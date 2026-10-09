@@ -243,12 +243,13 @@ class Agent:
                 (self.record_dir / f"{state['elapsed_ms']:06d}.jpg").write_bytes(
                     base64.b64decode(state["page"]["screenshot"])
                 )
-            repeated = state["history"][-3:]
+            # Each no-op is set aside, so a short streak is still progress; only a long one means stuck.
+            repeated = state["history"][-6:]
             last = state["history"][-1]
             key = (last["kind"], last["action"], last["url"])
             same = [h for h in state["history"] if (h["kind"], h["action"], h["url"]) == key]
-            if len(repeated) == 3 and all(h["page_changed"] is False and h["kind"] != "wait" for h in repeated):
-                return self.finish("blocked", state["page"], "Three actions in a row changed nothing")
+            if len(repeated) == 6 and all(h["page_changed"] is False and h["kind"] != "wait" for h in repeated):
+                return self.finish("blocked", state["page"], "Six actions in a row changed nothing")
             if last["kind"] not in {"wait", "scroll"} and len(same) >= 4:
                 return self.finish("blocked", state["page"], "Repeating the same action on the same page")
             scrolls = 0
