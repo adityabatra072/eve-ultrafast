@@ -148,6 +148,23 @@ def pdf_text(url, limit=60000):
     return "\n".join(pages)[:limit]
 
 
+# Registers an element from a closed shadow root in the snapshot's node cache and describes it like the
+# snapshot would, so the executor can act on it by id.
+REGISTER_HIDDEN = """function() {
+  const c=window.__eveFast; if (!c) return null;
+  if (!c.ids.has(this)) c.ids.set(this,c.next++);
+  const id=c.ids.get(this); c.nodes.set(id,this);
+  const r=this.getBoundingClientRect(), tag=this.tagName;
+  const plain=['button','submit','reset','checkbox','radio','file','hidden'];
+  const editable=(tag==='INPUT' && !plain.includes(this.type)) || tag==='TEXTAREA';
+  const label=(this.getAttribute('aria-label')||this.innerText||this.value||this.placeholder||tag).trim().slice(0,80);
+  const role=tag==='A' ? 'link' : editable ? 'textbox' : tag==='SELECT' ? 'combobox' : 'button';
+  return {node:id, guard:c.guard(this), role,
+    kind: editable ? 'fill' : 'click', label, value: editable ? String(this.value||'') : '',
+    rect:{x:r.x,y:r.y,w:r.width,h:r.height}};
+}"""
+
+
 class Unavailable(StalePage):
     """The executor refused a target before any input. The agent stops offering it on that page."""
 
@@ -299,7 +316,7 @@ class Browser:
                     self.pdf_cache = cache
                     info["text"] = cache[info["url"]][:6000]
                     info["fingerprint"] = fingerprint(info)
-                return self.merge_frames(info)
+                return self.merge_closed_shadow(self.merge_frames(info))
             except StalePage:
                 if time.monotonic() > deadline:
                     raise
@@ -427,6 +444,51 @@ class Browser:
         owner = self.call("DOM.getFrameOwner", frameId=frame_id)
         quad = self.call("DOM.getBoxModel", backendNodeId=owner["backendNodeId"])["model"]["content"]
         return quad[0], quad[1], quad[2] - quad[0], quad[5] - quad[1]
+
+    def merge_closed_shadow(self, info):
+        """Controls inside closed shadow roots, found through DevTools (page scripts cannot see them)."""
+        hosts = info.get("closed_hosts") or []
+        if not hosts:
+            return info
+        added = []
+        for host in hosts:
+            try:
+                found_host = self.call("Runtime.evaluate", expression=f"window.__eveFast.nodes.get({host})")
+                handle = found_host["result"]["objectId"]
+                tree = self.call("DOM.describeNode", objectId=handle, depth=-1, pierce=True)["node"]
+            except Exception:  # noqa: BLE001 - a host that went away has nothing to add
+                continue
+            found = []
+
+            def walk(node, hidden):
+                for root in node.get("shadowRoots", []):
+                    walk(root, hidden or root.get("shadowRootType") == "closed")
+                for child in node.get("children", []):
+                    if hidden and child.get("nodeName") in {"BUTTON", "A", "INPUT", "SELECT", "TEXTAREA"}:
+                        found.append(child["backendNodeId"])
+                    walk(child, hidden)
+
+            walk(tree, False)
+            for backend in found[:30]:
+                try:
+                    obj = self.call("DOM.resolveNode", backendNodeId=backend)["object"]["objectId"]
+                    item = self.call("Runtime.callFunctionOn", objectId=obj, returnByValue=True,
+                                     functionDeclaration=REGISTER_HIDDEN)["result"].get("value")
+                except Exception:  # noqa: BLE001
+                    continue
+                if item and item["rect"]["w"] and item["rect"]["h"] and item["rect"]["y"] < 2 * info.get("h", 780):
+                    added.append(item)
+        if not added:
+            return info
+        controls = [a for a in info["actions"] if a.get("kind") in {"scroll", "wait"}]
+        others = [a for a in info["actions"] if a.get("kind") not in {"scroll", "wait"}]
+        for n, item in enumerate(added, 1):
+            item["id"] = f"s{n}"
+            # The executor's freshness check compares this guard before acting.
+            info.setdefault("guards", {})[str(item["node"])] = item.pop("guard", None)
+        info["actions"] = others + added + controls
+        info["fingerprint"] = fingerprint(info)
+        return info
 
     def merge_frames(self, info):
         """Read cross-origin frames (embedded forms, widgets) through their own targets and add their controls."""

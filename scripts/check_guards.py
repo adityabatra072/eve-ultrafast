@@ -162,7 +162,11 @@ CAPABILITIES = """<!doctype html><title>Capabilities</title>
 <a href="data:text/plain,eve" download="eve-guard-download.txt">Download notes</a>
 <iframe title="Example" src="https://example.com/" style="width:320px;height:160px"></iframe>
 <table><tr><th style="cursor:pointer" onclick="window.sorted=1">Due</th></tr></table>
-<img alt="Avatar" width="30" height="30"><img alt="Avatar" width="30" height="30">"""
+<img alt="Avatar" width="30" height="30"><img alt="Avatar" width="30" height="30">
+<secret-box></secret-box>
+<script>customElements.define('secret-box', class extends HTMLElement { constructor() { super();
+  this.attachShadow({mode:'closed'}).innerHTML='<input aria-label="Hidden name">' +
+    '<button onclick="window.hiddenSaved=this.previousElementSibling.value">Hidden save</button>'; } });</script>"""
 
 
 def capabilities(passed):
@@ -220,6 +224,14 @@ def capabilities(passed):
         browser.act(header, page)
         assert browser.evaluate("window.sorted") == 1
         passed.append("a header clickable only by script is offered and clicked")
+
+        page = browser.observe(screenshot=False)
+        hidden = next(a for a in page["actions"] if a["label"] == "Hidden name" and a["kind"] == "fill")
+        browser.act(hidden, page, text="Rao")
+        page = browser.observe(screenshot=False)
+        browser.act(next(a for a in page["actions"] if a["label"] == "Hidden save"), page)
+        assert browser.evaluate("window.hiddenSaved") == "Rao"
+        passed.append("typing and clicking inside a closed shadow root")
 
         page = browser.observe(screenshot=False)
         frame = next(a for a in page["actions"] if a["kind"] == "frame")

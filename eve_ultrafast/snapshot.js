@@ -259,7 +259,15 @@
   if (scrollY+innerHeight<height-2) actions.push({id:'scroll_down',kind:'scroll',label:'Scroll down',delta:560});
   if (scrollY>0) actions.push({id:'scroll_up',kind:'scroll',label:'Scroll up',delta:-560});
   actions.push({id:'wait',kind:'wait',label:'Wait for the page to update'});
-  return {url:location.href,title:document.title,w:innerWidth,h:innerHeight,text,
+  // Custom elements whose shadow root is closed hide their controls from page scripts; list them so the
+  // agent can look inside through DevTools.
+  const closed_hosts=[];
+  for (const e of document.querySelectorAll('*')) {
+    if (closed_hosts.length>=10 || !e.localName.includes('-') || e.shadowRoot || !customElements.get(e.localName)) continue;
+    const r=e.getBoundingClientRect();
+    if (r.width && r.height && r.bottom>0 && r.top<innerHeight*2 && visible(e)) closed_hosts.push(identity(e));
+  }
+  return {url:location.href,title:document.title,w:innerWidth,h:innerHeight,text,closed_hosts,
     pdf:document.contentType==='application/pdf',
     scroll:{y:scrollY,height},actions,marker,page_key,guards,omitted_actions};
 })()
