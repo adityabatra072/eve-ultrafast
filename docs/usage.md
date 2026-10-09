@@ -45,9 +45,10 @@ with Agent(None, "Go to Amazon India and find me the best mouse under 5000 rupee
 
 - **Start page.** The first argument is where to start. Pass `None` to start on a blank tab; the agent then opens the right site itself.
 - **Each step.** `agent.run()` yields the state after every step. `state["history"]` lists what it did.
-- **When it ends.** `state["status"]` is `done` or `blocked`. `state["stop_reason"]` says why a run stopped early, and `state["answer"]` holds the reply.
+- **The result.** `state["status"]` is `done` or `blocked`. `state["stop_reason"]` says why a run stopped early, and `state["answer"]` holds the reply.
 - **Uploads.** `files=["resume.pdf"]` lets it attach those files, and nothing else on disk, to upload fields.
 - **Follow-up goals.** `agent.follow_up("...")` gives the same tab a new goal; call `agent.run()` again.
+- **When it ends.** The tab stays on the page the run reached. `keep_open=False` closes it instead.
 - **Screenshots.** `screenshots=True` or `record_dir="frames"` keeps them. EVE does not need them, so they are off by default.
 
 Run your script with `uv run --env-file .env python your_script.py` if you use a `.env` file.

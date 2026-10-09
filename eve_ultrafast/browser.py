@@ -209,6 +209,11 @@ def connect():
     """Use BU_CDP_URL, then a browser with remote debugging on, then a dedicated Chrome we start.
 
     Returns True when the agent owns the browser window, so its tab can come to the front."""
+    own = f"http://127.0.0.1:{CHROME_PORT}"
+    if os.environ.get("BU_CDP_URL") == own and getattr(connect, "started", False):
+        # A later run in the same process: BU_CDP_URL points at the Chrome we set up earlier.
+        ensure_daemon()
+        return True
     if os.environ.get("BU_CDP_URL") or os.environ.get("BU_CDP_WS") or os.environ.get("BU_BROWSER_ID"):
         ensure_daemon()
         return False
@@ -231,7 +236,8 @@ def connect():
             if time.monotonic() > deadline:
                 raise RuntimeError(f"Chrome did not open its debugging port {CHROME_PORT}.")
             time.sleep(0.1)
-    os.environ["BU_CDP_URL"] = f"http://127.0.0.1:{CHROME_PORT}"
+    os.environ["BU_CDP_URL"] = own
+    connect.started = True
     ensure_daemon()
     return True
 
@@ -254,6 +260,14 @@ class Browser:
         # In someone's everyday Chrome the tab stays in the background; in our own window it comes forward.
         self.target = cdp("Target.createTarget", url="about:blank", background=not owned)["targetId"]
         self.session = cdp("Target.attachToTarget", targetId=self.target, flatten=True)["sessionId"]
+        if owned:
+            # Our own Chrome starts with an empty tab; drop it so a finished run is what the window shows.
+            for t in cdp("Target.getTargets")["targetInfos"]:
+                if t["type"] == "page" and t["url"] == "about:blank" and t["targetId"] != self.target:
+                    try:
+                        cdp("Target.closeTarget", targetId=t["targetId"])
+                    except Exception:  # noqa: BLE001
+                        pass
         self.call("Emulation.setDeviceMetricsOverride", width=1120, height=780, deviceScaleFactor=1, mobile=False)
         # Keep rAF/menus rendering in an owned background tab, without activating the user's Chrome tab.
         self.call("Emulation.setFocusEmulationEnabled", enabled=True)
@@ -626,10 +640,18 @@ class Browser:
                 pass
             time.sleep(0.05)
 
-    def close(self):
-        if self.target:
-            cdp("Target.closeTarget", targetId=self.target)
-            self.target = None
+    def close(self, close_tab=True):
+        """Let go of the tab. It stays on the page it reached unless close_tab is set."""
+        if not self.target:
+            return
+        try:
+            if close_tab:
+                cdp("Target.closeTarget", targetId=self.target)
+            else:
+                cdp("Target.detachFromTarget", sessionId=self.session)
+        except Exception:  # noqa: BLE001 - a tab the person already closed needs no cleanup
+            pass
+        self.target = None
 
 
 def fingerprint(state):

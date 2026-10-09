@@ -68,6 +68,8 @@ def command(name, body):
             urls.get(scenario, f"{ORIGIN}/fixture.html?scenario={scenario}"),
             goal,
             screenshots=True,
+            # The inspector shows this tab until the next run, then closes it so runs don't pile up tabs.
+            keep_open=False,
             record_dir=Path.cwd() / "artifacts" / "frames" if body.get("record") else None,
         )
         AGENT.state["scenario"] = scenario

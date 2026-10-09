@@ -25,7 +25,7 @@ from .questions import MAX_STEPS
 
 
 class Agent:
-    def __init__(self, url, goals, *, record_dir=None, screenshots=False, files=()):
+    def __init__(self, url, goals, *, record_dir=None, screenshots=False, files=(), keep_open=True):
         # With no start URL the agent opens a blank tab and NAVIGATEs on its own.
         task = goals.strip() if isinstance(goals, str) else "\n".join(goals).strip()
         if not task:
@@ -44,6 +44,8 @@ class Agent:
         # (page state, action id) pairs the executor refused. Once the page changes (a menu reopens), they
         # are offered again.
         self.unavailable = set()
+        # When the run ends, leave its tab on the page it reached; keep_open=False closes it instead.
+        self.keep_open = keep_open
         warming = threading.Thread(target=warm, daemon=True)
         warming.start()
         self.browser = Browser(url or "about:blank")
@@ -52,7 +54,7 @@ class Agent:
         try:
             page = self.browser.observe(screenshot=self.screenshots)
         except Exception:
-            self.browser.close()
+            self.browser.close(close_tab=True)
             raise
         warming.join(timeout=10)
         self.state = dict(
@@ -439,7 +441,7 @@ class Agent:
             yield self.command("tick")
 
     def close(self):
-        self.browser.close()
+        self.browser.close(close_tab=not self.keep_open)
 
     def __enter__(self):
         return self

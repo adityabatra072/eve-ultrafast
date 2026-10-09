@@ -903,7 +903,7 @@ def run(name, start, goal, check, options=None):
     fresh_site(start)
     result = {"task": name, "url": "", "status": "error", "answer": None, "error": None, "actions": []}
     try:
-        with Agent(start, goal, files=options.get("files", ())) as agent:
+        with Agent(start, goal, files=options.get("files", ()), keep_open=False) as agent:
             error, state = None, None
             try:
                 for state in agent.run():

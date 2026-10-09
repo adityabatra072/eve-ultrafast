@@ -23,7 +23,7 @@ def main():
     output = Path("artifacts/dynamic/fixture") / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     output.mkdir(parents=True, exist_ok=True)
     print(f"Trace: {output}", flush=True)
-    with Agent("http://127.0.0.1:8766/fixture.html?scenario=travel", args.goal) as agent:
+    with Agent("http://127.0.0.1:8766/fixture.html?scenario=travel", args.goal, keep_open=False) as agent:
         try:
             for state in agent.run():
                 history = state["history"]
