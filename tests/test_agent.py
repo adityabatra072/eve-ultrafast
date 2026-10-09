@@ -7,9 +7,15 @@ from unittest.mock import Mock
 
 import pytest
 
-from jev_ultrafast import agent as loop
-from jev_ultrafast import model
-from jev_ultrafast.browser import StalePage, browser_operation, fingerprint
+from eve_ultrafast import agent as loop
+from eve_ultrafast import model
+from eve_ultrafast.browser import StalePage, browser_operation, fingerprint
+
+
+@pytest.fixture(autouse=True)
+def no_saved_wally_key(monkeypatch, tmp_path):
+    # Tests never read the developer's real wally sign-in.
+    monkeypatch.setattr(model, "WALLY_CREDENTIALS", tmp_path / "credentials.json")
 
 
 def page():
@@ -60,7 +66,7 @@ def test_invalid_choice_is_rejected(mutation):
         a["choice"] = "b"
     else:
         a["confidence"] = 5
-    with pytest.raises(ValueError, match="Invalid TypeSafe"):
+    with pytest.raises(ValueError, match="Invalid EVE"):
         model.validate_choice(a, {"a", "b"})
 
 
@@ -76,6 +82,8 @@ def test_one_index_per_node_with_operation_specific_targets():
 
 def test_all_heads_are_one_request_and_only_matching_head_executes(monkeypatch):
     calls = []
+    p = page()
+    p["actions"].insert(1, {"id": "e4", "kind": "fill", "label": "Author", "role": "textbox", "value": "", "node": 40})
 
     def post(_url, _key, body):
         calls.append(body)
@@ -83,14 +91,14 @@ def test_all_heads_are_one_request_and_only_matching_head_executes(monkeypatch):
             "model": "test",
             "answers": {
                 "operation": choice(body["questions"]["operation"]["criteria"], "TYPE_TEXT"),
-                "type_text_target": choice(["1"], "1"),
+                "type_text_target": choice(["1", "2"], "1"),
                 "click_target": {"choice": "invented"},
             },
         }
 
-    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setenv("RUNANYWHERE_API_KEY", "test")
     monkeypatch.setattr(model, "post_json", post)
-    d = model.choose(page(), "Find a book", [])
+    d = model.choose(p, "Find a book", [])
     assert len(calls) == 1
     assert d["operation"] == "TYPE_TEXT" and d["target"] == "1" and d["choice"] == "e1"
     assert set(calls[0]["questions"]) == {"operation", "click_target", "type_text_target"}
@@ -107,9 +115,9 @@ def test_click_cannot_consume_a_text_target(monkeypatch):
             },
         }
 
-    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setenv("RUNANYWHERE_API_KEY", "test")
     monkeypatch.setattr(model, "post_json", post)
-    with pytest.raises(ValueError, match="Invalid TypeSafe"):
+    with pytest.raises(ValueError, match="Invalid EVE"):
         model.choose(page(), "Find a book", [])
 
 
@@ -123,9 +131,10 @@ def test_target_head_receives_control_state_and_full_next_step_rules(monkeypatch
     def post(_url, _key, body):
         questions = body["questions"]
         target = questions["click_target"]
-        assert target["criteria"]["1"]["checked"] == "true"
-        assert target["criteria"]["1"]["selected"] is False
-        assert questions["operation"]["instructions"]["rules"] in target["instructions"]["rules"]
+        assert target["criteria"]["1"]["state"] == "checked, not selected"
+        assert "current_value" not in target["criteria"]["1"]
+        assert '[1] checkbox "Free cancellation" (checked, not selected) · CLICK' in body["state"]["elements"]
+        assert set(questions["operation"]["instructions"]["rules"]) <= set(target["instructions"]["rules"])
         return {
             "model": "test",
             "answers": {
@@ -134,10 +143,185 @@ def test_target_head_receives_control_state_and_full_next_step_rules(monkeypatch
             },
         }
 
-    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setenv("RUNANYWHERE_API_KEY", "test")
     monkeypatch.setattr(model, "post_json", post)
     d = model.choose(p, "Search with free cancellation", [])
     assert d["choice"] == "e3"
+
+
+def many_links(count):
+    p = page()
+    p["actions"] = [
+        {"id": f"l{i}", "kind": "click", "label": f"Story {i}", "role": "link", "value": "", "node": 100 + i}
+        for i in range(1, count + 1)
+    ] + [{"id": "wait", "kind": "wait", "label": "Wait"}]
+    return p
+
+
+def depth(value):
+    if isinstance(value, dict):
+        return 1 + max(map(depth, value.values()), default=0)
+    if isinstance(value, list):
+        return 1 + max(map(depth, value), default=0)
+    return 0
+
+
+def test_state_fits_the_system_one_nesting_limit(monkeypatch):
+    p = page()
+    p["actions"].append({
+        "id": "s1", "kind": "select", "label": "Cabin → Economy", "role": "combobox", "value": "economy",
+        "current_value": "business", "node": 50,
+    })
+    sent = []
+    monkeypatch.setenv("RUNANYWHERE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", lambda _u, _k, body: sent.append(body) or {
+        "model": "eve", "answers": {"operation": choice(body["questions"]["operation"]["criteria"], "WAIT")},
+    })
+    model.choose(p, "Fly economy", [{"action": "Go", "kind": "click", "text": None, "page_changed": True}])
+    state = sent[0]["state"]
+    # Arrays and objects inside the state may nest three levels in all.
+    assert all(depth(v) <= 2 for v in state.values())
+    assert '[3] combobox "Cabin" value="business" · SELECT · options: [3:1] Cabin → Economy' in state["elements"]
+
+
+def test_history_reaches_the_model_as_numbered_lines_with_unsubmitted_fields():
+    history = [
+        {"action": "Destination", "kind": "fill", "role": "searchbox", "text": "Lisbon", "page_changed": True},
+        {"action": "Free cancellation", "kind": "click", "role": "checkbox", "text": None, "page_changed": False},
+    ]
+    assert model.history_text(history) == '1. fill Destination "Lisbon"\n2. click Free cancellation (no visible change)'
+    assert model.unsubmitted(history) == "Destination"
+    history.append({"action": "Find stays", "kind": "click", "role": "button", "text": None, "page_changed": True})
+    assert model.unsubmitted(history) == "none"
+    assert model.history_text([]) == "none"
+
+
+def test_single_candidate_head_needs_no_question(monkeypatch):
+    def post(_url, _key, body):
+        assert set(body["questions"]) == {"operation", "click_target"}
+        operations = body["questions"]["operation"]["criteria"]
+        return {"model": "eve", "answers": {"operation": choice(operations, "TYPE_TEXT")}}
+
+    monkeypatch.setenv("RUNANYWHERE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", post)
+    d = model.choose(page(), "Find a book", [])
+    assert d["choice"] == "e1" and d["rounds"] == 1
+
+
+@pytest.mark.parametrize("count", [27, 60, 156, 700])
+def test_large_heads_split_and_finish_with_a_final_round(monkeypatch, count):
+    calls = []
+
+    def post(_url, _key, body):
+        calls.append(body)
+        questions = body["questions"]
+        assert all(2 <= len(q["criteria"]) <= model.MAX_OPTIONS for q in questions.values())
+        answers = {}
+        for name, q in questions.items():
+            ids = list(q["criteria"])
+            # Every chunk sounds sure, so the split head needs a final round.
+            answers[name] = choice(ids, "CLICK" if name == "operation" else ("2" if "2" in ids else ids[0]))
+        return {"model": "eve", "answers": answers, "usage": {"input_tokens": 10, "output_tokens": 0}}
+
+    monkeypatch.setenv("RUNANYWHERE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", post)
+    d = model.choose(many_links(count), "Open story 2", [])
+    rounds = 3 if count > model.MAX_OPTIONS**2 else 2
+    assert len(calls) == rounds and d["rounds"] == rounds
+    first, final = calls[0], calls[-1]
+    heads = [q for name, q in first["questions"].items() if name.startswith("click_target_")]
+    offered = [i for q in heads for i in q["criteria"] if i != model.NONE]
+    assert sorted(offered) == sorted(str(i) for i in range(1, count + 1))
+    assert set(final["questions"]) == {"click_target"} and "2" in final["questions"]["click_target"]["criteria"]
+    assert final["state"] == first["state"]
+    assert d["choice"] == "l2" and d["usage"]["input_tokens"] == 10 * rounds
+
+
+def test_one_sure_chunk_settles_a_split_head_without_a_final_round(monkeypatch):
+    calls = []
+
+    def post(_url, _key, body):
+        calls.append(body)
+        answers = {"operation": choice(body["questions"]["operation"]["criteria"], "CLICK")}
+        for name, q in body["questions"].items():
+            if name == "operation":
+                continue
+            ids = list(q["criteria"])
+            assert ids[-1] == model.NONE and len(ids) <= model.MAX_OPTIONS
+            sure = "45" in ids
+            p = {i: 0.0 for i in ids}
+            p.update({"45": 0.95, "46": 0.05} if sure else {model.NONE: 0.7, ids[0]: 0.2, ids[1]: 0.1})
+            answers[name] = {"choice": max(p, key=p.get), "confidence": 0.9, "probabilities": p}
+        return {"model": "eve", "answers": answers}
+
+    monkeypatch.setenv("RUNANYWHERE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", post)
+    d = model.choose(many_links(70), "Open story 45", [])
+    assert len(calls) == 1 and d["rounds"] == 1
+    assert d["choice"] == "l45" and model.NONE not in d["target_probabilities"]
+
+
+def test_none_is_never_a_target(monkeypatch):
+    calls = []
+
+    def post(_url, _key, body):
+        calls.append(body)
+        answers = {}
+        for name, q in body["questions"].items():
+            if name == "operation":
+                answers[name] = choice(q["criteria"], "CLICK")
+            else:
+                ids = list(q["criteria"])
+                answers[name] = choice(ids, model.NONE if model.NONE in ids else ids[0])
+        return {"model": "eve", "answers": answers}
+
+    monkeypatch.setenv("RUNANYWHERE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", post)
+    d = model.choose(many_links(70), "Open nothing in particular", [])
+    assert len(calls) == 2 and d["choice"].startswith("l")
+    assert model.NONE not in calls[1]["questions"]["click_target"]["criteria"]
+
+
+def test_split_head_is_not_requested_again_for_other_operations(monkeypatch):
+    calls = []
+
+    def post(_url, _key, body):
+        calls.append(body)
+        return {"model": "eve", "answers": {"operation": choice(body["questions"]["operation"]["criteria"], "WAIT")}}
+
+    monkeypatch.setenv("RUNANYWHERE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", post)
+    assert model.choose(many_links(80), "Wait for stories", [])["choice"] == "wait"
+    assert len(calls) == 1
+
+
+def test_missing_decision_credential_stops_before_any_request(monkeypatch):
+    monkeypatch.delenv("RUNANYWHERE_API_KEY", raising=False)
+    post = Mock()
+    monkeypatch.setattr(model, "post_json", post)
+    with pytest.raises(ValueError, match="RUNANYWHERE_API_KEY"):
+        model.choose(page(), "Find a book", [])
+    post.assert_not_called()
+
+
+def test_saved_wally_sign_in_is_used_when_no_key_is_set(monkeypatch, tmp_path):
+    monkeypatch.delenv("RUNANYWHERE_API_KEY", raising=False)
+    (tmp_path / "credentials.json").write_text('{"access_token": "sk-saved"}')
+    assert model.api_key() == "sk-saved"
+    monkeypatch.setenv("RUNANYWHERE_API_KEY", "sk-env")
+    assert model.api_key() == "sk-env"
+
+
+def test_text_helper_defaults_to_wally_without_reasoning_flags(monkeypatch):
+    for name in ("TEXT_MODEL_API_KEY", "TEXT_MODEL_BASE_URL", "TEXT_MODEL", "TEXT_MODEL_REASONING"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("RUNANYWHERE_API_KEY", "ra-key")
+    post = Mock(return_value={"choices": [{"message": {"content": '{"text":"London"}'}}]})
+    monkeypatch.setattr(model, "post_json", post)
+    assert model.field_text({"goal": "Fly to London"})[0] == "London"
+    url, key, body = post.call_args.args
+    assert url == "https://inference.runanywhere.ai/v1/chat/completions" and key == "ra-key"
+    assert body["model"] == "glm-5.3-flash" and "reasoning" not in body
 
 
 def test_quoted_task_text_still_uses_the_llm(monkeypatch):
@@ -153,7 +337,8 @@ def test_quoted_task_text_still_uses_the_llm(monkeypatch):
 
 def test_missing_text_credential_stops_before_guessing(monkeypatch):
     monkeypatch.delenv("TEXT_MODEL_API_KEY", raising=False)
-    with pytest.raises(ValueError, match="TEXT_MODEL_API_KEY"):
+    monkeypatch.delenv("RUNANYWHERE_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="RUNANYWHERE_API_KEY"):
         model.field_text({"goal": 'Enter "Zurich"'})
 
 
@@ -228,7 +413,7 @@ def test_stale_observation_preserves_executed_action(runner):
 
 
 def test_observation_is_one_atomic_browser_read(monkeypatch):
-    import jev_ultrafast.browser as browser
+    import eve_ultrafast.browser as browser
 
     p = page()
     cdp = Mock(return_value={"result": {"value": p}})
@@ -240,7 +425,7 @@ def test_observation_is_one_atomic_browser_read(monkeypatch):
 
 
 def test_executor_rejects_a_stale_page_before_browser_input(monkeypatch):
-    import jev_ultrafast.browser as browser
+    import eve_ultrafast.browser as browser
 
     b = browser.Browser.__new__(browser.Browser)
     b.fresh = Mock(return_value=False)
@@ -253,7 +438,7 @@ def test_executor_rejects_a_stale_page_before_browser_input(monkeypatch):
 
 @pytest.mark.parametrize("response", [{"exceptionDetails": {}}, {"result": {}}])
 def test_interrupted_dropdown_mutation_cannot_be_retried_as_stale(monkeypatch, response):
-    import jev_ultrafast.browser as browser
+    import eve_ultrafast.browser as browser
 
     # A navigation can destroy the evaluation result after the change event already fired.
     if "exceptionDetails" in response:
@@ -282,15 +467,15 @@ def test_flight_verification_rejects_wrong_trip(changed):
 
     actual = {
         "url": "https://www.google.com/travel/flights/search?tfs=example",
-        "text": "Track prices from Zürich to London departing 2026-09-20",
+        "text": "Track prices from Zürich to London departing 2026-11-20",
         "actions": [
             {"label": k, "value": v}
             for k, v in [
                 ("Change ticket type. One way", "One way"),
                 ("Where from?", "Zürich"),
                 ("Where to?", "London"),
-                ("Departure", "Sun, Sep 20"),
-                ("Nonstop flight on Sunday, September 20. Select flight", ""),
+                ("Departure", "Fri, Nov 20"),
+                ("Nonstop flight on Friday, November 20. Select flight", ""),
             ]
         ],
     }

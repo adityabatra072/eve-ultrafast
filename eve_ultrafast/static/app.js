@@ -4,8 +4,9 @@ let state = null,
   busy = false,
   automatic = false;
 const goals = {
-  flights: 'Find one-way flights from Zurich to London on September 20, 2026, for one adult in economy. Stop when matching flight options are visible. Do not select or book a flight.',
-  travel: 'Find a Design stay in Lisbon with Free cancellation and open Casa Flora.',
+  flights: 'Find one-way flights from Zurich to London on November 20, 2026, for one adult in economy. Stop when matching flight options are visible. Do not select or book a flight.',
+  travel:
+    'Use the destination search and filters to find Design stays in Lisbon with Free cancellation, then open Casa Flora.',
   research:
     "Open the article about using finite choices to control browser agents.",
 };
@@ -83,7 +84,7 @@ function render() {
     idle: "Ready to explore",
     ready: "Page observed · ready for a decision",
     predicted: "Choice ready · inspect or execute",
-    done: "Jev reports complete · inspect the page",
+    done: "EVE reports complete · inspect the page",
     blocked: "Stopped · no supported next action",
   };
   $("status").textContent = labels[state.status] || state.status;
@@ -104,7 +105,7 @@ function render() {
   $("latency").textContent = d ? `${d.latency_ms} ms` : "—";
   $("confidence").textContent = d?.target_confidence != null ? percent(d.target_confidence) : "—";
   $("completion").textContent = d ? d.operation : "—";
-  $("ranking-note").textContent = d ? "Ranked by Jev" : "Unranked";
+  $("ranking-note").textContent = d ? "Ranked by EVE" : "Unranked";
   const op = Object.entries(d?.operation_probabilities || {}).sort((a,b)=>b[1]-a[1]);
   $("operation-choices").innerHTML = op.map(([name,p]) =>
     `<span class="operation-choice ${name === d.operation ? 'best' : ''}">${escape(name)} <b>${percent(p)}</b></span>`).join('');
@@ -158,7 +159,7 @@ $("scenario").addEventListener("change", () => {
   $("goal").value = goals[$("scenario").value];
 });
 $("choose").addEventListener("click", () =>
-  perform(() => call("predict"), "Jev is comparing the actions…"),
+  perform(() => call("predict"), "EVE is comparing the actions…"),
 );
 $("execute").addEventListener("click", () =>
   perform(
@@ -229,7 +230,7 @@ $("download").addEventListener("click", () => {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = "typesafe-browser-trace.json";
+  a.download = "eve-browser-trace.json";
   a.click();
   URL.revokeObjectURL(url);
 });

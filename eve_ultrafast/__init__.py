@@ -1,4 +1,4 @@
-"""Jev chooses an observed action. Code owns execution."""
+"""EVE chooses an observed action. Code owns execution."""
 
 from .agent import Agent
 from .browser import Browser

@@ -1,11 +1,12 @@
 """The complete agent loop. Typed choices, observable state, bounded execution."""
 
 import base64
+import threading
 import time
 from pathlib import Path
 
 from .browser import Browser, StalePage
-from .model import action_space, choose, field_context, field_text
+from .model import action_space, choose, field_context, field_text, warm
 from .questions import MAX_STEPS
 
 
@@ -16,6 +17,8 @@ class Agent:
             raise ValueError("Supply a task")
         plan = [task]
         self.pending_text = None
+        warming = threading.Thread(target=warm, daemon=True)
+        warming.start()
         self.browser = Browser(url)
         self.record_dir = Path(record_dir) if record_dir else None
         self.screenshots = screenshots or bool(record_dir)
@@ -24,6 +27,7 @@ class Agent:
         except Exception:
             self.browser.close()
             raise
+        warming.join(timeout=10)
         self.state = dict(
             browser=self.browser,
             goal="\n".join(plan),
@@ -123,6 +127,7 @@ class Agent:
                     "step": len(state["history"]) + 1,
                     "action": action["label"],
                     "kind": action["kind"],
+                    "role": action.get("role"),
                     "choice": selected,
                     "probability": decision["probabilities"][selected],
                     "confidence": decision["confidence"],
