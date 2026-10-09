@@ -5,10 +5,12 @@ import threading
 import time
 from pathlib import Path
 
+from . import canvas
 from .browser import KEYS, Browser, StalePage, Unavailable, verification_wall
 from .model import (
     SYNTHETIC,
     action_space,
+    canvas_cell,
     choose,
     field_context,
     field_text,
@@ -179,6 +181,8 @@ class Agent:
                     self.page_texts[page["url"]] = state["browser"].full_text(read_pdf=False)
                 except (StalePage, AttributeError, TypeError):
                     pass
+            if action["kind"] == "canvas":
+                return self.point_at_canvas(page, decision, selected)
             # Browser.act checks freshness immediately before input, including after text generation.
             try:
                 outcome = state["browser"].act(action, page, text=text) or {}
@@ -244,6 +248,40 @@ class Agent:
             state["status"] = "ready"
         else:
             raise ValueError("Unknown command")
+        return self.snapshot()
+
+    def point_at_canvas(self, page, decision, selected):
+        """Coarse cell, then a finer one inside it; the code clicks that sub-cell's centre."""
+        state, browser = self.state, self.state["browser"]
+        target = page["canvases"][0]
+        try:
+            shot, rect, scale = browser.canvas_shot(target["node"])
+            cell, meta = canvas_cell(
+                state["goal"], state["history"], canvas.coarse(shot, rect, scale), canvas.labels(), 1
+            )
+            box = canvas.cell_box(rect, cell)
+            sub, _ = canvas_cell(state["goal"], state["history"], canvas.fine(shot, box, scale), canvas.sub_labels(), 2)
+        except ValueError:
+            self.unavailable.add((page["fingerprint"], selected))
+            raise StalePage("The vision helper named no valid spot; choosing again.") from None
+        x, y = canvas.point(box, sub)
+        browser.click_point(x, y)
+        state["text_calls"].append({**meta, "field": "Canvas", "value": f"{cell}.{sub}"})
+        state["history"].append({
+            "step": len(state["history"]) + 1, "action": f"Click the canvas at cell {cell}, part {sub}",
+            "kind": "canvas", "role": "canvas", "choice": selected,
+            "probability": decision["probabilities"].get(selected, 0), "confidence": decision["confidence"],
+            "latency_ms": decision["latency_ms"], "text": None, "text_helper": meta.get("model"),
+            "text_latency_ms": meta.get("latency_ms", 0), "operation": "POINT_CANVAS", "target": None,
+            "page_changed": None, "url": page["url"], "usage": decision["usage"], "downloaded": [],
+            "executed_ms": round((time.perf_counter() - state["started_at"]) * 1000),
+        })
+        time.sleep(0.3)
+        state["page"] = browser.observe(screenshot=self.screenshots)
+        state["history"][-1]["page_changed"] = state["page"]["fingerprint"] != page["fingerprint"]
+        state["elapsed_ms"] = round((time.perf_counter() - state["started_at"]) * 1000)
+        state["history"][-1]["elapsed_ms"] = state["elapsed_ms"]
+        state["status"] = "ready"
         return self.snapshot()
 
     def wait_out(self, wall):

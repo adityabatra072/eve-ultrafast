@@ -13,7 +13,7 @@ import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -70,6 +70,21 @@ def embedded_title():
         urlopen(f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video}", timeout=20).read()
     )
     return meta["title"]
+
+
+CANVAS_PAGE = """<!doctype html><title>Shapes</title><body style="margin:30px;font-family:sans-serif">
+<h1>Shapes</h1><canvas id="c" width="600" height="300" style="border:1px solid #888"></canvas>
+<p id="out">Nothing clicked</p>
+<script>
+const c=document.getElementById('c'), g=c.getContext('2d');
+const dots=[['red',110,150],['green',300,90],['blue',480,220]];
+for (const [color,x,y] of dots) { g.fillStyle=color; g.beginPath(); g.arc(x,y,45,0,7); g.fill(); }
+c.addEventListener('click', e => {
+  const r=c.getBoundingClientRect(), x=e.clientX-r.left, y=e.clientY-r.top;
+  const hit=dots.find(([, cx, cy]) => Math.hypot(cx-x, cy-y) <= 45);
+  document.getElementById('out').textContent = hit ? 'You clicked ' + hit[0] : 'You missed';
+});
+</script>"""
 
 
 def both(*checks):
@@ -474,6 +489,11 @@ TASKS = {
         "Find the weight of the checked baggage allowance for economy class on Qatar Airways.",
         both(url_has("qatarairways.com"), answer_matches(r"\d+\s?kg")),
     ),
+    "canvas_click": (
+        "data:text/html," + quote(CANVAS_PAGE),
+        "Click the green circle on the canvas.",
+        has("you clicked green"),
+    ),
     "flights": (
         "https://www.google.com/travel/flights?hl=en",
         "Find one-way flights from Zurich to London on November 20, 2026, for one adult in economy. "
@@ -488,7 +508,7 @@ def fresh_site(start):
     connect()
     # Cookies set on a parent domain (consent banners) survive per-origin clearing, so clear them all.
     cdp("Storage.clearCookies")
-    if start:
+    if start and start.startswith("http"):
         parts = urlsplit(start)
         cdp("Storage.clearDataForOrigin", origin=f"{parts.scheme}://{parts.netloc}", storageTypes="all")
 

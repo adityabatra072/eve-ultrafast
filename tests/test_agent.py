@@ -925,3 +925,22 @@ def test_a_wall_that_never_clears_stops_the_run_with_a_reason(runner, monkeypatc
     runner.state["status"] = "ready"
     runner.command("predict", {})
     assert runner.state["status"] == "blocked" and "human verification" in runner.state["stop_reason"]
+
+
+
+def test_canvas_cells_turn_into_points_inside_the_canvas():
+    from eve_ultrafast import canvas
+
+    rect = {"x": 30, "y": 100, "w": 600, "h": 300}
+    assert len(canvas.labels()) == 24 and canvas.labels()[0] == "A1" and canvas.labels()[-1] == "F4"
+    box = canvas.cell_box(rect, "C2")
+    assert box == {"x": 230.0, "y": 175.0, "w": 100.0, "h": 75.0}
+    assert canvas.point(box, "5") == (280.0, 212.5)  # the middle of the middle sub-cell
+
+
+def test_an_invalid_cell_is_refused(monkeypatch):
+    monkeypatch.setenv("TEXT_MODEL_API_KEY", "t")
+    reply = {"choices": [{"message": {"content": '{"cell": "Z9"}'}}]}
+    monkeypatch.setattr(model, "post_json", Mock(return_value=reply))
+    with pytest.raises(ValueError, match="no valid cell"):
+        model.canvas_cell("Click green", [], "img", ["A1", "B1"], 1)

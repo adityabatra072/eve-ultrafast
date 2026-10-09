@@ -548,6 +548,21 @@ class Browser:
         except StalePage:
             return 0
 
+    def canvas_shot(self, node):
+        """A PNG of the viewport, the canvas's current box and the image-to-CSS scale."""
+        rect = self.evaluate(f"(() => {{ const r=window.__eveFast?.nodes.get({node})?.getBoundingClientRect(); "
+                             f"return r ? {{x:r.x,y:r.y,w:r.width,h:r.height,dpr:devicePixelRatio}} : null; }})()")
+        if not rect:
+            raise Unavailable("The canvas is gone; nothing clicked.")
+        data = base64.b64decode(self.call("Page.captureScreenshot", format="png")["data"])
+        return data, rect, rect.pop("dpr", 1) or 1
+
+    def click_point(self, x, y):
+        """Click a point the code computed from a chosen grid cell, never from model coordinates."""
+        for event in ("mouseMoved", "mousePressed", "mouseReleased"):
+            self.call("Input.dispatchMouseEvent", type=event, x=x, y=y,
+                      **({} if event == "mouseMoved" else {"button": "left", "clickCount": 1}))
+
     def screenshot(self):
         """A JPEG of the viewport, for answers about things drawn rather than written."""
         try:

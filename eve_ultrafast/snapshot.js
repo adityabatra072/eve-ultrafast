@@ -267,7 +267,14 @@
     const r=e.getBoundingClientRect();
     if (r.width && r.height && r.bottom>0 && r.top<innerHeight*2 && visible(e)) closed_hosts.push(identity(e));
   }
-  return {url:location.href,title:document.title,w:innerWidth,h:innerHeight,text,closed_hosts,
+  // Large drawing surfaces (maps, games, editors): nothing inside is a DOM control, so the agent may point at them.
+  const canvases=[];
+  for (const e of document.querySelectorAll('canvas')) {
+    const r=e.getBoundingClientRect(), w=Math.min(r.right,innerWidth)-Math.max(r.left,0),
+      h=Math.min(r.bottom,innerHeight)-Math.max(r.top,0);
+    if (canvases.length<3 && w>=200 && h>=150 && visible(e)) canvases.push({node:identity(e),rect:{x:r.x,y:r.y,w:r.width,h:r.height}});
+  }
+  return {url:location.href,title:document.title,w:innerWidth,h:innerHeight,text,closed_hosts,canvases,
     pdf:document.contentType==='application/pdf',
     scroll:{y:scrollY,height},actions,marker,page_key,guards,omitted_actions};
 })()

@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from .browser import DOWNLOADS
-from .questions import ANSWER_VALUE, NEXT_ACTION, TARGET, TEXT_VALUE, URL_VALUE
+from .questions import ANSWER_VALUE, CELL_VALUE, NEXT_ACTION, TARGET, TEXT_VALUE, URL_VALUE
 
 CLIENT = httpx.Client(http2=True, timeout=25)
 API_BASE = "https://inference.runanywhere.ai/v1"
@@ -292,6 +292,7 @@ def pick_target(url, body, result, operation, candidates):
 SYNTHETIC = {
     "SAVE_PDF": {"id": "SAVE_PDF", "kind": "pdf", "label": "Save the page as a PDF"},
     "SAVE_FILE": {"id": "SAVE_FILE", "kind": "save_file", "label": "Save the open file"},
+    "POINT_CANVAS": {"id": "POINT_CANVAS", "kind": "canvas", "label": "Click a spot on the canvas"},
     "NAVIGATE": {"id": "NAVIGATE", "kind": "navigate", "label": "Open a web address"},
     "PRESS_ENTER": {"id": "PRESS_ENTER", "kind": "enter", "label": "Press Enter"},
     "GO_BACK": {"id": "GO_BACK", "kind": "back", "label": "Go back"},
@@ -307,6 +308,11 @@ def synthetic_operations(state, history):
         operations["GO_BACK"] = "Return to the previous page."
     operations["NAVIGATE"] = "Open a different website by its address. A small LLM will write the URL from the goal."
     operations["SAVE_PDF"] = "Save the current page as a PDF file, only when the goal asks for a PDF or a saved copy."
+    if state.get("canvases"):
+        operations["POINT_CANVAS"] = (
+            "Click a spot on the drawing area (a map, game or canvas editor). A vision model picks the spot from a "
+            "screenshot."
+        )
     if state.get("pdf"):
         operations["SAVE_FILE"] = "Download the PDF file this tab is showing to the downloads folder."
     return operations
@@ -551,6 +557,21 @@ def final_answer(goal, page, history, earlier=(), downloads=(), image=None):
         context["screenshot"] = "attached: the visible part of the final page"
     value, meta = helper(ANSWER_VALUE, context, None, image=image)
     return value or {}, meta
+
+
+def canvas_cell(goal, history, image, names, level):
+    """A vision model names one grid cell over a screenshot. Only a label from names is accepted."""
+    context = {
+        "goal": goal,
+        "today": today(),
+        "grid": "coarse grid over the drawing area" if level == 1 else "the chosen cell, enlarged, split into 1 to 9",
+        "labels": names,
+        "recent_actions": [{k: h.get(k) for k in ("action", "text")} for h in history[-6:]],
+    }
+    value, meta = helper(CELL_VALUE, context, "cell", image=image)
+    if value not in names:
+        raise ValueError("The vision helper named no valid cell; nothing clicked.")
+    return value, meta
 
 
 def page_url(context):

@@ -69,6 +69,7 @@ source = { editable = "." }
 dependencies = [
     { name = "browser-harness" },
     { name = "httpx", extra = ["http2"] },
+    { name = "pillow" },
     { name = "pypdf" },
 ]
 
@@ -83,6 +84,7 @@ dev = [
 requires-dist = [
     { name = "browser-harness", specifier = "==0.1.13" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.28,<1" },
+    { name = "pillow", specifier = ">=11,<13" },
     { name = "pypdf", specifier = ">=5,<7" },
 ]
 
