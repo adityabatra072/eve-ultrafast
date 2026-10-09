@@ -873,3 +873,22 @@ def test_a_helper_that_gives_no_value_twice_sets_the_field_aside(runner, monkeyp
     assert helper.call_count == 2
     assert (runner.state["page"]["fingerprint"], "e1") in runner.unavailable
     runner.state["browser"].act.assert_not_called()
+
+
+
+@pytest.mark.parametrize("answer", ["oops", None, 42, {"no": "actions"}])
+def test_a_frame_that_answers_garbage_is_skipped(monkeypatch, answer):
+    import eve_ultrafast.browser as browser
+
+    b = browser.Browser.__new__(browser.Browser)
+    b.target, b.session, b.frame_sessions = "page", "s", {"f1": "fs"}
+    b.frame_box = Mock(return_value=(0, 0, 300, 200))
+
+    def cdp(method, **_params):
+        if method == "Target.getTargets":
+            return {"targetInfos": [{"targetId": "f1", "type": "iframe", "parentId": "page", "url": "https://ads.test/"}]}
+        return {"result": {"value": answer}}
+
+    monkeypatch.setattr(browser, "cdp", cdp)
+    info = {"url": "https://shop.test/", "text": "Shop", "actions": [], "scroll": {}, "w": 1120, "h": 780}
+    assert b.merge_frames(dict(info))["actions"] == []

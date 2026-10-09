@@ -424,7 +424,8 @@ class Browser:
                           returnByValue=True).get("result", {}).get("value")
             except Exception:  # noqa: BLE001 - a frame mid-load is read on the next observation
                 continue
-            if not sub:
+            # Third-party frames (ads, trackers) can answer with anything; use only a real snapshot.
+            if not isinstance(sub, dict) or not isinstance(sub.get("actions"), list):
                 continue
             left, top = max(ox, 0), max(oy, 0)
             right, bottom = min(ox + w, info.get("w", 1120)), min(oy + h, 2 * info.get("h", 780))
