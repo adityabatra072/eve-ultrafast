@@ -807,7 +807,7 @@ def browser_operation(request):
                   if (owner?.target && owner.target!=='_self') owner.target='_self';
                 }
               }
-              if (action.kind==='click') {
+              if (action.kind==='click' || action.kind==='fill') {
                 // Watch for the click, so a mouse event Chrome never delivered can be noticed.
                 window.__eveClicked=false;
                 const seen=()=>{ window.__eveClicked=true; };
@@ -859,6 +859,15 @@ def browser_operation(request):
                         evaluate(f"(() => {{ const e=window.__eveFast?.nodes.get({action['node']}); "
                                  f"if (e?.isConnected) e.click(); return 1; }})()")
                 if kind == "fill":
+                    # If the page never received the click into the field (the same lost-input case as above),
+                    # focus the field directly; otherwise typing lands in whatever field had focus before.
+                    try:
+                        reached = evaluate("window.__eveClicked")
+                    except StalePage:
+                        reached = True
+                    if reached is False:
+                        evaluate(f"(() => {{ const e=window.__eveFast?.nodes.get({action['node']}); "
+                                 f"if (e?.isConnected) e.focus(); return 1; }})()")
                     # The first click into a frame can leave focus on the frame's body; give the field focus then.
                     # A field that handed focus to an overlay input (Google Flights) keeps it there.
                     evaluate(f"(() => {{ const e=window.__eveFast?.nodes.get({action['node']}), d=e?.ownerDocument; "
