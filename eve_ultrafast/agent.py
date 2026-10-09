@@ -5,7 +5,7 @@ import threading
 import time
 from pathlib import Path
 
-from .browser import KEYS, Browser, StalePage, Unavailable
+from .browser import KEYS, Browser, StalePage, Unavailable, verification_wall
 from .model import (
     SYNTHETIC,
     action_space,
@@ -64,6 +64,7 @@ class Agent:
             text_calls=[],
             answer=None,
             stop_reason=None,
+            notice=None,
             downloads=[],
             elapsed_ms=0,
             started_at=None,
@@ -106,6 +107,12 @@ class Agent:
                 raise ValueError("This run has stopped. Start a fresh demo.")
             if len(state["decisions"]) >= MAX_STEPS * 2:
                 return self.finish("blocked", state["page"], "Reached the model-call budget")
+            wall = verification_wall(state["page"])
+            if wall:
+                # Never solved by the agent: wait for it to clear on its own, then for a person if one can see it.
+                state["page"] = self.wait_out(wall)
+                if verification_wall(state["page"]):
+                    return self.finish("blocked", state["page"], f"The site asked for human verification ({wall})")
             page = state["page"]
             offered = self.offerable(page["actions"])
             usable = [a for a in offered if (page["fingerprint"], a.get("id")) not in self.unavailable]
@@ -238,6 +245,26 @@ class Agent:
         else:
             raise ValueError("Unknown command")
         return self.snapshot()
+
+    def wait_out(self, wall):
+        """Cloudflare's check often clears by itself in a few seconds; a CAPTCHA needs a person at the window."""
+        browser = self.state["browser"]
+        waits = [15] + ([getattr(browser, "human_wait", 0)] if getattr(browser, "human_wait", 0) else [])
+        page = self.state["page"]
+        for limit in waits:
+            if limit > 15:
+                self.state["notice"] = f"The site shows {wall}. Solve it in the browser window and EVE will continue."
+            deadline = time.monotonic() + limit
+            while time.monotonic() < deadline:
+                time.sleep(1.5)
+                try:
+                    page = browser.observe(screenshot=self.screenshots)
+                except StalePage:
+                    continue
+                if not verification_wall(page):
+                    self.state["notice"] = None
+                    return page
+        return page
 
     def offerable(self, actions):
         """File inputs become one upload choice per allowed file; without files they are not offered.

@@ -59,6 +59,31 @@ def changed_since(before):
     return {name for name, mtime in saved_files().items() if before.get(name) != mtime}
 
 
+WALL_TEXT = (
+    "verifying you are human", "verify you are human", "performing security verification",
+    "checking your browser", "unusual traffic from your computer network", "press & hold to confirm",
+    "please complete the security check", "are you a robot",
+)
+WALL_FRAMES = (
+    "recaptcha/api2/anchor", "recaptcha/enterprise/anchor", "hcaptcha.com/captcha", "challenges.cloudflare.com",
+)
+
+
+def verification_wall(page):
+    """A page that wants a person (Cloudflare, Google's unusual-traffic page, a CAPTCHA box). None otherwise."""
+    title, text = (page.get("title") or "").lower(), (page.get("text") or "").lower()[:3000]
+    if title.startswith(("just a moment", "attention required")) or any(phrase in text for phrase in WALL_TEXT):
+        return "a human verification page"
+    if "/sorry/" in (page.get("url") or "") and "google." in (page.get("url") or ""):
+        return "Google's unusual-traffic check"
+    frames = [f.get("url", "") for f in (page.get("frames") or {}).values()]
+    frames += [a.get("value", "") for a in page.get("actions", []) if a.get("kind") == "frame"]
+    # An invisible reCAPTCHA badge sits on many ordinary forms; only a visible challenge counts.
+    if any(mark in url and "size=invisible" not in url for url in frames for mark in WALL_FRAMES):
+        return "a CAPTCHA"
+    return None
+
+
 def pending_dialog():
     """An open alert, confirm or prompt. While one is open the page answers nothing else."""
     try:
@@ -181,6 +206,10 @@ def connect():
 class Browser:
     def __init__(self, url):
         owned = connect()
+        # How long to wait for a person to clear a verification page: only worth it when someone can see the window.
+        headless = owned and os.environ.get("EVE_HEADLESS") == "1"
+        explicit = os.environ.get("EVE_HUMAN_WAIT")
+        self.human_wait = int(explicit) if explicit else (0 if headless or os.environ.get("BU_CDP_URL") else 180)
         DOWNLOADS.mkdir(parents=True, exist_ok=True)
         # Files already there are not this run's; slow downloads that finish later still count. Chrome
         # overwrites a same-named file, so a file counts as new when it was written after this moment.

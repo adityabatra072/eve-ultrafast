@@ -892,3 +892,36 @@ def test_a_frame_that_answers_garbage_is_skipped(monkeypatch, answer):
     monkeypatch.setattr(browser, "cdp", cdp)
     info = {"url": "https://shop.test/", "text": "Shop", "actions": [], "scroll": {}, "w": 1120, "h": 780}
     assert b.merge_frames(dict(info))["actions"] == []
+
+
+
+@pytest.mark.parametrize("page, expected", [
+    ({"title": "Just a moment...", "text": "", "url": "https://x.com/"}, True),
+    ({"title": "Dictionary", "text": "Performing security verification", "url": "https://x.com/"}, True),
+    ({"title": "Google", "text": "", "url": "https://www.google.com/sorry/index?continue=x"}, True),
+    ({"title": "Login", "text": "Sign in", "url": "https://x.com/",
+      "frames": {"f": {"url": "https://www.google.com/recaptcha/api2/anchor?k=1&size=normal"}}}, True),
+    ({"title": "Login", "text": "Sign in", "url": "https://x.com/",
+      "frames": {"f": {"url": "https://www.google.com/recaptcha/api2/anchor?k=1&size=invisible"}}}, False),
+    ({"title": "Shop", "text": "Add to cart", "url": "https://x.com/"}, False),
+])
+def test_verification_walls_are_recognised(page, expected):
+    from eve_ultrafast.browser import verification_wall
+
+    page.setdefault("actions", [])
+    assert bool(verification_wall(page)) is expected
+
+
+def test_a_wall_that_never_clears_stops_the_run_with_a_reason(runner, monkeypatch):
+    wall = {**runner.state["page"], "title": "Just a moment...", "text": "Verifying you are human"}
+    runner.state["page"] = wall
+    runner.state["browser"].observe.return_value = wall
+    runner.state["browser"].human_wait = 0
+    monkeypatch.setattr(loop.time, "sleep", lambda _s: None)
+    clock = iter(range(0, 10000, 5))
+    monkeypatch.setattr(loop.time, "monotonic", lambda: next(clock))
+    blocked = ({"answer": "Blocked by a check", "complete": False}, {})
+    monkeypatch.setattr(loop, "final_answer", Mock(return_value=blocked))
+    runner.state["status"] = "ready"
+    runner.command("predict", {})
+    assert runner.state["status"] == "blocked" and "human verification" in runner.state["stop_reason"]

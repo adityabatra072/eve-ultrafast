@@ -94,8 +94,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(403, "Forbidden", "text/plain")
         path = urlparse(self.path).path
         if path == "/api/state":
-            with LOCK:
-                return self.send(200, json.dumps(response_state()))
+            if LOCK.acquire(blocking=False):
+                try:
+                    return self.send(200, json.dumps(response_state()))
+                finally:
+                    LOCK.release()
+            # A step is running (perhaps waiting for a person to clear a check): report only its notice.
+            notice = AGENT.state.get("notice") if AGENT else None
+            return self.send(200, json.dumps({"busy": True, "notice": notice}))
         files = {
             "/": ("index.html", "text/html"),
             "/app.js": ("app.js", "text/javascript"),

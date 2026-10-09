@@ -45,6 +45,16 @@ function controls() {
   $("stop").hidden = !automatic;
   $("download").disabled = !state?.history?.length;
 }
+// While a step runs, ask for its notice (the page wants a person to clear a check).
+setInterval(async () => {
+  if (!busy) return;
+  try {
+    const live = await fetch("/api/state").then((r) => r.json());
+    if (live.busy && live.notice) $("status").textContent = live.notice;
+  } catch {
+    // the next poll will try again
+  }
+}, 2000);
 async function perform(fn, label) {
   if (busy) return;
   busy = true;
@@ -91,7 +101,7 @@ function render() {
     done: "EVE reports complete · inspect the page",
     blocked: "Stopped · no supported next action",
   };
-  $("status").textContent =
+  $("status").textContent = state.notice ? state.notice :
     state.status === "blocked" && state.stop_reason
       ? `Stopped · ${state.stop_reason}`
       : labels[state.status] || state.status;
