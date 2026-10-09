@@ -102,7 +102,13 @@
     if (!rname || r.width<=0 || r.height<=0 || x<clip.l || y<clip.t || x>=clip.r || y>=clip.b) continue;
     // A cell or menu item wrapping its own control (a calendar day's checkbox, a menu's link) is offered once,
     // as that control.
-    if (['gridcell','menuitem','treeitem','tab','option'].includes(rname) && e.querySelector(selector)) continue;
+    // Only when the inner control carries the container's own leading label: a suggestion with a small
+    // "nearby airports" button inside is still its own choice.
+    if (['gridcell','menuitem','treeitem','tab','option'].includes(rname)) {
+      const own=name(e).replace(/\s+/g,' ').trim();
+      if ([...e.querySelectorAll(selector)].some(c=>{ const n=name(c).replace(/\s+/g,' ').trim(); return n && own.startsWith(n); }))
+        continue;
+    }
     // An unnamed checkbox (a to-do toggle, say) takes its row's text so the model can tell rows apart.
     const row=toggle(e) && !name(e) ? e.closest('li,tr,[role="row"],label')?.innerText.trim().slice(0,80) : '';
     const base={node:identity(e),role:rname,label:(name(e)||row||rname).replace(/\s+/g,' ').trim(),
@@ -129,6 +135,27 @@
       if (editable) actions.push({...base,kind:'click',value,label:'Open '+base.label});
     }
   }
+  // Drag-and-drop: things that can be dragged, and places that take a drop.
+  const sources=new Set(), drops=new Set();
+  for (const {doc,dx,dy,clip} of frames) {
+    const pick=(query,set,kind,role)=>{
+      for (const e of doc.querySelectorAll(query)) {
+        if (set.size>=30 || !visible(e)) continue;
+        const box=e.getBoundingClientRect(), x=dx+box.x+box.width/2, y=dy+box.y+box.height/2;
+        if (!box.width || !box.height || x<clip.l || y<clip.t || x>=clip.r || y>=clip.b) continue;
+        const id=identity(e);
+        if (set.has(id)) continue;
+        set.add(id);
+        const label=(name(e)||e.innerText||e.id||'').replace(/\s+/g,' ').trim().slice(0,60)||(role+' '+set.size);
+        actions.push({node:id,role,kind,label,value:'',rect:{x:dx+box.x,y:dy+box.y,w:box.width,h:box.height}});
+      }
+    };
+    pick('[draggable="true"],.ui-draggable,[class*="draggable" i],[class*="sortable" i] > *,[aria-grabbed]',
+      sources,'drag','draggable');
+    pick('.ui-droppable,[class*="droppable" i],[class*="dropzone" i],[class*="drop-zone" i],[id*="drop" i],' +
+      '[aria-dropeffect],[draggable="true"]',drops,'drop','drop zone');
+  }
+  if (!sources.size) for (let i=actions.length-1; i>=0; i--) if (actions[i].kind==='drop') actions.splice(i,1);
   // Menus and captions that only appear under the pointer.
   const hovers=new Set();
   for (const {doc,dx,dy,clip} of frames) {
@@ -188,20 +215,22 @@
     if (month) a.label+=' '+month[0];
   }
   // Identical labels ("Add to cart", "Reply", "Toggle Todo") get their row's text so each target is distinct.
-  const counts={};
-  for (const a of actions) counts[a.label]=(counts[a.label]||0)+1;
+  // Counted per operation: the same card as a drag source and a drop zone is not ambiguous.
+  const key=a=>a.kind+'|'+a.label, counts={};
+  for (const a of actions) counts[key(a)]=(counts[key(a)]||0)+1;
   for (const a of actions) {
-    if (counts[a.label]<2) continue;
+    if (counts[key(a)]<2) continue;
     const row=cache.nodes.get(a.node)?.closest('li,tr,[role="row"],[role="listitem"],article');
     const context=row?.innerText.replace(/\s+/g,' ').trim().slice(0,90);
     if (context && context!==a.label) a.label+=' · '+context;
   }
   // Still identical (three "User Avatar" images): number them in page order.
   const left={}, seen={};
-  for (const a of actions) left[a.label]=(left[a.label]||0)+1;
-  for (const a of actions) if (left[a.label]>1 && a.kind!=='select') {
-    seen[a.label]=(seen[a.label]||0)+1;
-    a.label+=` (${seen[a.label]} of ${left[a.label]})`;
+  for (const a of actions) left[key(a)]=(left[key(a)]||0)+1;
+  for (const a of actions) if (left[key(a)]>1 && a.kind!=='select') {
+    const k=key(a);
+    seen[k]=(seen[k]||0)+1;
+    a.label+=` (${seen[k]} of ${left[k]})`;
   }
   const words=[]; let node,length=0;
   for (const {doc,dx,dy,clip} of frames) for (const root of roots(doc)) {

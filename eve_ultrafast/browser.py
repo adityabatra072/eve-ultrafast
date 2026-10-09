@@ -99,7 +99,15 @@ FULL_TEXT = """(() => {
   for (const f of document.querySelectorAll('iframe,frame')) {
     try { if (f.contentDocument?.body) parts.push(f.contentDocument.body.innerText); } catch { /* cross-origin */ }
   }
-  return {text:parts.join('\\n').slice(0,60000), pdf:document.contentType==='application/pdf'};
+  // How much of the screen is drawn rather than written (canvas, large images): answers then get a screenshot.
+  let drawn=0;
+  for (const e of document.querySelectorAll('canvas,img,svg,video')) {
+    const r=e.getBoundingClientRect(), w=Math.min(r.right,innerWidth)-Math.max(r.left,0),
+      h=Math.min(r.bottom,innerHeight)-Math.max(r.top,0);
+    if (w>0 && h>0 && r.width*r.height>=40000) drawn+=w*h;
+  }
+  return {text:parts.join('\\n').slice(0,60000), pdf:document.contentType==='application/pdf',
+    drawn:drawn/(innerWidth*innerHeight)};
 })()"""
 
 
@@ -187,8 +195,9 @@ class Browser:
         self.call("Emulation.setDeviceMetricsOverride", width=1120, height=780, deviceScaleFactor=1, mobile=False)
         # Keep rAF/menus rendering in an owned background tab, without activating the user's Chrome tab.
         self.call("Emulation.setFocusEmulationEnabled", enabled=True)
-        # Dialog events reach the daemon only with the Page domain on.
+        # Dialog events reach the daemon only with the Page domain on; frame owners need the DOM domain.
         self.call("Page.enable")
+        self.call("DOM.enable")
         try:
             self.call("Page.navigate", url=url, _response_timeout=NAVIGATION_TIMEOUT)
         except TimeoutError:
@@ -261,7 +270,7 @@ class Browser:
                     self.pdf_cache = cache
                     info["text"] = cache[info["url"]][:6000]
                     info["fingerprint"] = fingerprint(info)
-                return info
+                return self.merge_frames(info)
             except StalePage:
                 if time.monotonic() > deadline:
                     raise
@@ -276,7 +285,20 @@ class Browser:
         unaimed = {"scroll", "wait", "key", "enter", "navigate", "back", "pdf", "save_file", "frame"}
         if action is not None and action["kind"] in unaimed:
             return True
-        if action is not None and action["kind"] in {"click", "select", "hover", "upload", "fill"}:
+        if action is not None and action.get("frame"):
+            node, state = action["node"], page.get("frames", {}).get(action["frame"])
+            session = getattr(self, "frame_sessions", {}).get(action["frame"])
+            if not state or not session or type(node) is not int:
+                return False
+            try:
+                current = cdp("Runtime.evaluate", session_id=session, returnByValue=True, expression=(
+                    "(() => { const c=window.__eveFast; "
+                    f"return c ? [c.pageKey(),c.guard(c.nodes.get({node}))] : null; }})()"
+                )).get("result", {}).get("value")
+            except TimeoutError:
+                return False
+            return current == [state["page_key"], state["guards"].get(str(node))]
+        if action is not None and action["kind"] in {"click", "select", "hover", "upload", "fill", "drag"}:
             node = action["node"]
             if type(node) is not int:
                 return False
@@ -296,9 +318,11 @@ class Browser:
         # While the pointer rests where a hover left it, moving away can close a menu and shift the layout.
         # The next click or field first moves the pointer, lets the page settle, and measures again.
         settle = getattr(self, "pointer_parked", False) and action["kind"] in {"click", "fill"}
-        result = browser_operation(
-            {"operation": "act", "session": self.session, "action": action, "text": text, "settle": settle}
-        )
+        request = {"operation": "act", "session": self.session, "action": action, "text": text, "settle": settle}
+        if action.get("frame"):
+            ox, oy, _, _ = self.frame_box(action["frame"])
+            request.update(frame_session=self.frame_sessions[action["frame"]], frame_offset={"x": ox, "y": oy})
+        result = browser_operation(request)
         if action["kind"] == "hover":
             self.pointer_parked = True
         elif result.get("pressed") or action["kind"] in {"navigate", "back", "frame"}:
@@ -310,6 +334,11 @@ class Browser:
             self.wait_for_load()
         if action["kind"] == "click":
             self.adopt_popups()
+            # A real link on a slow server: wait for the page it opens instead of reading the old one again.
+            target = (result.get("href") or "").split("#")[0]
+            if target and target != page["url"].split("#")[0]:
+                self.wait_for_navigation(page["url"], seconds=15)
+                self.wait_for_load()
         if before is not None:
             result["downloaded"] = self.new_downloads(before)
         return result
@@ -364,9 +393,87 @@ class Browser:
                 self.wait_for_load()
                 self.after_input = None
 
+    def frame_box(self, frame_id):
+        """Where a cross-origin frame's content sits in the page: (x, y, width, height)."""
+        owner = self.call("DOM.getFrameOwner", frameId=frame_id)
+        quad = self.call("DOM.getBoxModel", backendNodeId=owner["backendNodeId"])["model"]["content"]
+        return quad[0], quad[1], quad[2] - quad[0], quad[5] - quad[1]
+
+    def merge_frames(self, info):
+        """Read cross-origin frames (embedded forms, widgets) through their own targets and add their controls."""
+        try:
+            # The page's own frame tree leaves out cross-process frames; the target list names them, with the
+            # page as parent.
+            children = [
+                {"id": t["targetId"], "url": t["url"]} for t in cdp("Target.getTargets").get("targetInfos", [])
+                if t["type"] == "iframe" and t.get("parentId") == self.target and t["url"].startswith("http")
+            ]
+        except Exception:  # noqa: BLE001 - frames are extra; the page itself is already read
+            return info
+        if not children:
+            return info
+        sessions = self.__dict__.setdefault("frame_sessions", {})
+        added, texts, frames = [], [], {}
+        for n, frame in enumerate(children[:3], 1):
+            fid = frame["id"]
+            try:
+                if fid not in sessions:
+                    sessions[fid] = cdp("Target.attachToTarget", targetId=fid, flatten=True)["sessionId"]
+                ox, oy, w, h = self.frame_box(fid)
+                sub = cdp("Runtime.evaluate", session_id=sessions[fid], expression=READ_STATE,
+                          returnByValue=True).get("result", {}).get("value")
+            except Exception:  # noqa: BLE001 - a frame mid-load is read on the next observation
+                continue
+            if not sub:
+                continue
+            left, top = max(ox, 0), max(oy, 0)
+            right, bottom = min(ox + w, info.get("w", 1120)), min(oy + h, 2 * info.get("h", 780))
+            for a in sub["actions"]:
+                if "rect" not in a or a.get("kind") in {"scroll", "wait", "frame"}:
+                    continue
+                r = a["rect"]
+                cx, cy = ox + r["x"] + r["w"] / 2, oy + r["y"] + r["h"] / 2
+                if left <= cx < right and top <= cy < bottom:
+                    added.append({**a, "id": f"x{n}_{a['id']}", "frame": fid,
+                                  "rect": {**r, "x": ox + r["x"], "y": oy + r["y"]}})
+            frames[fid] = {"page_key": sub["page_key"], "guards": sub["guards"], "url": sub["url"]}
+            # Say which frame the text came from: a page can hold an ad player next to the video it embeds.
+            texts.append(f"[Embedded frame: {sub['url'][:120]}]\n{sub['text'][:2500]}")
+        if not added and not texts:
+            return info
+        controls = [a for a in info["actions"] if a.get("kind") in {"scroll", "wait"}]
+        others = [a for a in info["actions"] if a.get("kind") not in {"scroll", "wait"}]
+        info["actions"] = others + added + controls
+        info["text"] = "\n".join([info["text"], *texts])[:8000]
+        info["frames"] = frames
+        info["fingerprint"] = fingerprint(info)
+        return info
+
+    def drawn_share(self):
+        """Share of the screen covered by canvases and large images."""
+        try:
+            return (self.evaluate(FULL_TEXT) or {}).get("drawn", 0)
+        except StalePage:
+            return 0
+
+    def screenshot(self):
+        """A JPEG of the viewport, for answers about things drawn rather than written."""
+        try:
+            return self.call("Page.captureScreenshot", format="jpeg", quality=70)["data"]
+        except Exception:  # noqa: BLE001 - answers still work from text
+            return None
+
     def full_text(self, read_pdf=True):
         """The whole document's text for answers and page memory; a PDF's own text when the tab shows one."""
         found = self.evaluate(FULL_TEXT) or {}
+        for session in getattr(self, "frame_sessions", {}).values():
+            try:
+                inner = cdp("Runtime.evaluate", session_id=session, returnByValue=True,
+                            expression="[location.href, document.body?.innerText || '']").get("result", {}).get("value")
+            except Exception:  # noqa: BLE001 - a frame that went away has nothing to add
+                inner = None
+            if inner and inner[1]:
+                found["text"] = (found.get("text", "") + f"\n[Embedded frame: {inner[0][:120]}]\n" + inner[1])[:60000]
         if found.get("pdf") and read_pdf:
             try:
                 url = self.evaluate("location.href")
@@ -410,6 +517,13 @@ def fingerprint(state):
 def browser_operation(request):
     operation = request["operation"]
     session = request["session"]
+    # An element inside a cross-origin frame is measured in that frame's session; input still goes to the page,
+    # at the frame's offset.
+    frame_session = request.get("frame_session") or session
+    offset = request.get("frame_offset") or {"x": 0, "y": 0}
+
+    def in_frame(method, **params):
+        return cdp(method, session_id=frame_session, **params)
 
     def call(method, **params):
         try:
@@ -422,7 +536,7 @@ def browser_operation(request):
 
     def evaluate(expression):
         try:
-            result = call("Runtime.evaluate", expression=expression, returnByValue=True)
+            result = in_frame("Runtime.evaluate", expression=expression, returnByValue=True)
         except TimeoutError:
             if operation == "act" and request["action"]["kind"] == "select":
                 raise RuntimeError("Dropdown execution timed out; inspect before retrying.") from None
@@ -436,7 +550,7 @@ def browser_operation(request):
     if operation == "act":
         action = request["action"]
         kind = action["kind"]
-        pressed = False
+        pressed, href = False, None
         if kind == "scroll":
             call("Input.dispatchMouseEvent", type="mouseWheel", x=550, y=650, deltaX=0, deltaY=action["delta"])
         elif kind == "navigate":
@@ -487,15 +601,47 @@ def browser_operation(request):
                 call("Input.dispatchKeyEvent", type="rawKeyDown" if event == "keyDown" else event, key=name,
                      code="Space" if key == "Space" else key, windowsVirtualKeyCode=code,
                      **({"text": " "} if key == "Space" and event == "keyDown" else {}))
+        elif kind == "drag":
+            # Both ends come from the snapshot's node cache, never from model output.
+            ends = evaluate("""((a, b) => {
+              const c=window.__eveFast, src=c?.nodes.get(a), dst=c?.nodes.get(b);
+              if (!src?.isConnected || !dst?.isConnected) return 'unavailable';
+              src.scrollIntoView({block:'nearest'});
+              const center=e=>{ let x=0, y=0;
+                for (let w=e.ownerDocument.defaultView; w.frameElement; w=w.frameElement.ownerDocument.defaultView) {
+                  const r=w.frameElement.getBoundingClientRect(); x+=r.x; y+=r.y; }
+                const r=e.getBoundingClientRect(); return {x:x+r.x+r.width/2, y:y+r.y+r.height/2}; };
+              if (src.getAttribute('draggable')==='true') {
+                // HTML5 drag and drop: CDP mouse input does not start it, so fire the drag events in order.
+                const dt=new DataTransfer(), fire=(e,type)=>e.dispatchEvent(new DragEvent(type,
+                  {bubbles:true,cancelable:true,dataTransfer:dt}));
+                fire(src,'dragstart'); fire(dst,'dragenter'); fire(dst,'dragover');
+                fire(dst,'drop'); fire(src,'dragend');
+                return {html5:true};
+              }
+              return {from:center(src), to:center(dst)};
+            })(""" + json.dumps(action["node"]) + "," + json.dumps(action["drop"]["node"]) + ")")
+            if ends == "unavailable" or not isinstance(ends, dict):
+                raise Unavailable("Drag source or drop zone is gone; nothing was moved.")
+            if not ends.get("html5"):
+                x0, y0 = ends["from"]["x"] + offset["x"], ends["from"]["y"] + offset["y"]
+                x1, y1 = ends["to"]["x"] + offset["x"], ends["to"]["y"] + offset["y"]
+                call("Input.dispatchMouseEvent", type="mouseMoved", x=x0, y=y0)
+                call("Input.dispatchMouseEvent", type="mousePressed", x=x0, y=y0, button="left", clickCount=1)
+                for step in range(1, 11):
+                    call("Input.dispatchMouseEvent", type="mouseMoved", x=x0 + (x1 - x0) * step / 10,
+                         y=y0 + (y1 - y0) * step / 10, button="left", buttons=1)
+                call("Input.dispatchMouseEvent", type="mouseReleased", x=x1, y=y1, button="left", clickCount=1)
+                pressed = True
         elif kind == "upload":
             if type(action["node"]) is not int:
                 raise ValueError("Invalid observed node")
-            found = call("Runtime.evaluate", expression=f"window.__eveFast?.nodes.get({action['node']}) ?? null")
+            found = in_frame("Runtime.evaluate", expression=f"window.__eveFast?.nodes.get({action['node']}) ?? null")
             handle = found.get("result", {}).get("objectId")
             if not handle:
                 raise Unavailable("File input is gone; nothing was attached.")
             # Only paths the caller passed to the Agent ever reach this call.
-            call("DOM.setFileInputFiles", files=[action["value"]], objectId=handle)
+            in_frame("DOM.setFileInputFiles", files=[action["value"]], objectId=handle)
         elif kind == "back":
             entries = call("Page.getNavigationHistory")
             if entries.get("currentIndex", 0) > 0:
@@ -554,13 +700,29 @@ def browser_operation(request):
                   if (owner?.target && owner.target!=='_self') owner.target='_self';
                 }
               }
-              return {x,y};
+              if (action.kind==='click') {
+                // Watch for the click, so a mouse event Chrome never delivered can be noticed.
+                window.__eveClicked=false;
+                const seen=()=>{ window.__eveClicked=true; };
+                for (const type of ['pointerdown','mousedown','click'])
+                  view.addEventListener(type,seen,{capture:true,once:true});
+              }
+              const link=action.kind==='click' && e.closest('a[href]');
+              const real=link && !link.getAttribute('href').startsWith('#') && /^https?:/.test(link.href);
+              const href=real ? link.href : null;
+              return {x,y,href};
             })(""" + json.dumps(action) + "," + json.dumps(request.get("text")) + ")"
-            target = evaluate(script)
+            def resolve():
+                found = evaluate(script)
+                if isinstance(found, dict) and "x" in found:
+                    found = {**found, "x": found["x"] + offset["x"], "y": found["y"] + offset["y"]}
+                return found
+
+            target = resolve()
             if request.get("settle") and isinstance(target, dict) and "x" in target:
                 call("Input.dispatchMouseEvent", type="mouseMoved", x=target["x"], y=target["y"])
                 time.sleep(0.05)
-                target = evaluate(script)
+                target = resolve()
             if target == "unavailable":
                 raise Unavailable("Target is covered, disabled or gone; nothing was executed.")
             if target is None:
@@ -574,13 +736,26 @@ def browser_operation(request):
                 call("Input.dispatchMouseEvent", type="mouseMoved", x=target["x"], y=target["y"])
             elif kind != "select":
                 x, y = target["x"], target["y"]
+                href = target.get("href")
                 for event in ("mousePressed", "mouseReleased"):
                     call("Input.dispatchMouseEvent", type=event, x=x, y=y, button="left", clickCount=1)
                 pressed = True
+                if kind == "click":
+                    # Some pages stop receiving synthetic mouse input (seen after a login redirect). If the page
+                    # saw no press and no click at all, click the element through the DOM instead; a page that saw
+                    # the press handled it, so it is never clicked twice.
+                    try:
+                        seen = evaluate("window.__eveClicked")
+                    except StalePage:
+                        seen = True  # the click navigated away
+                    if seen is False:
+                        evaluate(f"(() => {{ const e=window.__eveFast?.nodes.get({action['node']}); "
+                                 f"if (e?.isConnected) e.click(); return 1; }})()")
                 if kind == "fill":
-                    # The first click into a frame can leave focus behind; make sure the field has it.
-                    evaluate(f"(() => {{ const e=window.__eveFast?.nodes.get({action['node']}); "
-                             f"if (e && e.ownerDocument.activeElement!==e) e.focus(); return 1; }})()")
+                    # The first click into a frame can leave focus on the frame's body; give the field focus then.
+                    # A field that handed focus to an overlay input (Google Flights) keeps it there.
+                    evaluate(f"(() => {{ const e=window.__eveFast?.nodes.get({action['node']}), d=e?.ownerDocument; "
+                             f"if (e && (!d.activeElement || d.activeElement===d.body)) e.focus(); return 1; }})()")
                     call(
                         "Input.dispatchKeyEvent",
                         type="keyDown",
@@ -601,6 +776,10 @@ def browser_operation(request):
                     evaluate("""((node, text) => {
                       const e=window.__eveFast?.nodes.get(node);
                       if (!e || !('value' in e) || e.value===text) return 1;
+                      // Some fields hand typing to an overlay input (Google Flights' "Where from?"). If the text
+                      // went to whatever has focus, leave it; force the value only when focus stayed here.
+                      const focused=e.ownerDocument.activeElement;
+                      if (focused && focused!==e && focused!==e.ownerDocument.body) return 1;
                       const proto=Object.getPrototypeOf(e), setter=Object.getOwnPropertyDescriptor(proto,'value')?.set;
                       if (!setter) return 0;
                       setter.call(e,text);
@@ -608,7 +787,7 @@ def browser_operation(request):
                       e.dispatchEvent(new Event('change',{bubbles:true}));
                       return 2;
                     })(""" + json.dumps(action["node"]) + "," + json.dumps(request["text"]) + ")")
-        return {"executed": action["id"], "pressed": pressed}
+        return {"executed": action["id"], "pressed": pressed, **({"href": href} if href else {})}
 
     info = evaluate(READ_STATE)
     if info is None:

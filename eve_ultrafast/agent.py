@@ -137,6 +137,9 @@ class Agent:
                 action = SYNTHETIC[selected]
             else:
                 action = next(a for a in self.offerable(page["actions"]) if a["id"] == selected)
+                if decision.get("drop"):
+                    drop = next(a for a in page["actions"] if a["id"] == decision["drop"])
+                    action = {**action, "drop": {k: drop[k] for k in ("id", "node", "label")}}
             if len(state["history"]) >= MAX_STEPS:
                 return self.finish("blocked", page, f"Stopped at the {MAX_STEPS}-action budget")
             text, helper = None, None
@@ -153,7 +156,15 @@ class Agent:
                 if self.pending_text and self.pending_text[0] == context:
                     _, text, helper = self.pending_text
                 else:
-                    text, helper = write(context)
+                    try:
+                        text, helper = write(context)
+                    except ValueError:
+                        try:
+                            text, helper = write(context)  # one more try: the helper's output varies
+                        except ValueError:
+                            # Leave this field for now and let EVE choose something else on this page.
+                            self.unavailable.add((page["fingerprint"], selected))
+                            raise StalePage("The text helper gave no usable value; choosing again.") from None
                     self.pending_text = (context, text, helper)
                     state["text_calls"].append({**helper, "field": action["label"], "value": text})
             if action["kind"] in {"click", "navigate", "enter", "back", "frame", "key"}:
@@ -173,7 +184,7 @@ class Agent:
             state["history"].append(
                 {
                     "step": len(state["history"]) + 1,
-                    "action": action["label"],
+                    "action": action["label"] + (f" → {action['drop']['label']}" if action.get("drop") else ""),
                     "kind": action["kind"],
                     "role": action.get("role"),
                     "choice": selected,
@@ -201,7 +212,7 @@ class Agent:
                 url=state["page"]["url"],
                 elapsed_ms=state["elapsed_ms"],
             )
-            if not state["history"][-1]["page_changed"] and action["kind"] not in {"wait", "scroll"}:
+            if not state["history"][-1]["page_changed"] and action["kind"] != "wait":
                 # It did nothing visible here; offer something else until the page changes.
                 self.unavailable.add((state["page"]["fingerprint"], selected))
             if state["record"]:
@@ -273,19 +284,33 @@ class Agent:
         for url, text in getattr(self, "page_texts", {}).items():
             if url != page["url"] and isinstance(text, str) and text:
                 earlier[url] = text
-        try:
+        browser = state["browser"]
+
+        def answer(image=None):
             final = {**page, "text": full}
-            verdict, helper = final_answer(
-                state["goal"], final, state["history"], list(earlier.items()), state.get("downloads", [])
+            found, meta = final_answer(
+                state["goal"], final, state["history"], list(earlier.items()), state.get("downloads", []), image
             )
-            if not isinstance(verdict, dict):
-                verdict = {"answer": verdict}
-            state["text_calls"].append({**helper, "field": "Answer", "value": verdict.get("answer")})
+            if not isinstance(found, dict):
+                found = {"answer": found}
+            state["text_calls"].append({**meta, "field": "Answer", "value": found.get("answer")})
+            return found
+
+        try:
+            # Charts, maps, canvases and image results carry facts the text lacks: show the helper the screen.
+            drawn = browser.drawn_share() if hasattr(browser, "drawn_share") else 0
+            shot = browser.screenshot() if isinstance(drawn, (int, float)) and drawn > 0.3 else None
+            verdict = answer(shot if isinstance(shot, str) else None)
+            if verdict.get("complete") is False and not isinstance(shot, str) and hasattr(browser, "screenshot"):
+                shot = browser.screenshot()
+                if isinstance(shot, str):
+                    verdict = answer(shot)
         except (ValueError, RuntimeError):
             verdict = {}
         answer = verdict.get("answer")
         # The answer step reads every page the run saw, so it doubles as a check on EVE's DONE.
-        if status == "done" and verdict.get("complete") is False and getattr(self, "rechecks", 0) < 2:
+        # A premature BLOCKED (giving up on the first page) gets the same second look.
+        if verdict.get("complete") is False and getattr(self, "rechecks", 0) < 2 and not reason:
             self.rechecks = getattr(self, "rechecks", 0) + 1
             missing = verdict.get("missing") or "the goal is not met yet"
             state["history"].append({

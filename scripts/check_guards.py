@@ -145,6 +145,7 @@ def main():
         browser.close()
     print("\n".join(passed))
     capabilities(passed)
+    isolated_frame_and_drag(passed)
     print(f"PASS: {len(passed)} browser guard checks; no model calls")
 
 
@@ -228,6 +229,81 @@ def capabilities(passed):
         passed.append("a cross-origin embedded page opens by itself")
     finally:
         browser.close()
+
+
+OUTER = """<!doctype html><title>Outer</title><body style="margin:20px">
+<script>window.got=null; addEventListener('message', e => { window.got = e.data; });</script>
+<iframe src="http://127.0.0.1:PORT2/inner.html" style="width:400px;height:150px;border:1px solid"></iframe>
+<div id="box" draggable="true" style="width:80px;height:40px;background:#cde">Card</div>
+<div id="zone" class="dropzone" style="width:200px;height:60px;border:2px dashed"
+  ondragover="event.preventDefault()" ondrop="window.dropped='box'">Done column</div>
+<div id="slide" class="draggable" style="position:relative;width:60px;height:30px;background:#ecd">Handle</div>
+<div id="target" class="droppable" style="width:200px;height:40px;border:1px solid">Target area</div>
+<script>
+  const h=document.querySelector('#slide'), t=document.querySelector('#target'); let down=false;
+  h.addEventListener('mousedown',()=>{down=true}); addEventListener('mouseup',e=>{
+    if (down) { const r=t.getBoundingClientRect();
+      if (e.clientX>=r.left&&e.clientX<=r.right&&e.clientY>=r.top&&e.clientY<=r.bottom) window.mouseDropped=true; }
+    down=false; });
+</script>"""
+INNER = """<!doctype html><title>Inner</title><body>
+<label>Your name <input id="name"></label>
+<button onclick="parent.postMessage(document.querySelector('#name').value,'*')">Send to page</button>"""
+
+
+def isolated_frame_and_drag(passed):
+    import socket
+    import tempfile
+    import threading
+    from functools import partial
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+    from pathlib import Path
+
+    def free_port():
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            return probe.getsockname()[1]
+
+    folder, port1, port2 = Path(tempfile.mkdtemp()), free_port(), free_port()
+    (folder / "outer.html").write_text(OUTER.replace("PORT2", str(port2)))
+    (folder / "inner.html").write_text(INNER)
+
+    class Quiet(SimpleHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+    servers = [ThreadingHTTPServer(("127.0.0.1", port), partial(Quiet, directory=folder)) for port in (port1, port2)]
+    for server in servers:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    # localhost and 127.0.0.1 are different sites, so Chrome runs the frame in its own process.
+    browser = Browser(f"http://localhost:{port1}/outer.html")
+    try:
+        time.sleep(1)
+        page = browser.observe(screenshot=False)
+        field = next(a for a in page["actions"] if a.get("frame") and a["kind"] == "fill")
+        browser.act(field, page, text="Asha Rao")
+        page = browser.observe(screenshot=False)
+        send = next(a for a in page["actions"] if a.get("frame") and a["label"] == "Send to page")
+        browser.act(send, page)
+        time.sleep(0.3)
+        assert browser.evaluate("window.got") == "Asha Rao", browser.evaluate("window.got")
+        passed.append("typing and clicking inside a cross-origin frame")
+
+        page = browser.observe(screenshot=False)
+        card = next(a for a in page["actions"] if a["kind"] == "drag" and a["label"] == "Card")
+        zone = next(a for a in page["actions"] if a["kind"] == "drop" and a["label"] == "Done column")
+        browser.act({**card, "drop": zone}, page)
+        assert browser.evaluate("window.dropped") == "box"
+        page = browser.observe(screenshot=False)
+        handle = next(a for a in page["actions"] if a["kind"] == "drag" and a["label"] == "Handle")
+        target = next(a for a in page["actions"] if a["kind"] == "drop" and a["label"] == "Target area")
+        browser.act({**handle, "drop": target}, page)
+        assert browser.evaluate("window.mouseDropped") is True
+        passed.append("HTML5 and mouse-driven drag and drop")
+    finally:
+        browser.close()
+        for server in servers:
+            server.shutdown()
 
 
 if __name__ == "__main__":

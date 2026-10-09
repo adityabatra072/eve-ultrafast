@@ -10,10 +10,11 @@ import os
 import re
 import sys
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from browser_harness.helpers import cdp  # noqa: E402
@@ -57,6 +58,18 @@ def show_titles(count):
         json.loads(urlopen(f"https://hacker-news.firebaseio.com/v0/item/{i}.json", timeout=20).read()) for i in ids
     ]
     return [item.get("title", "") for item in items]
+
+
+def embedded_title():
+    """Title of the YouTube video in W3Schools' Try-it example, from YouTube's own oEmbed, at check time."""
+    agent = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/154 Safari/537.36"}
+    request = Request("https://www.w3schools.com/html/tryit.asp?filename=tryhtml_youtubeiframe", headers=agent)
+    page = urlopen(request, timeout=20).read().decode()
+    video = re.search(r"youtube\.com/embed/([\w-]{11})", page).group(1)
+    meta = json.loads(
+        urlopen(f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video}", timeout=20).read()
+    )
+    return meta["title"]
 
 
 def both(*checks):
@@ -396,6 +409,71 @@ TASKS = {
         "Search for cafes near Connaught Place, New Delhi and tell me the name of one of them.",
         both(url_has("openstreetmap.org"), answer_matches(r"caf|coffee|\w{3,}")),
     ),
+    # Logged-in work on demo sites built for it, so no real account is involved.
+    "login_logout": (
+        "https://the-internet.herokuapp.com/login",
+        "Log in with username tomsmith and password SuperSecretPassword!, then log out.",
+        both(url_has("/login"), has("you logged out of the secure area")),
+    ),
+    "saucedemo_checkout": (
+        "https://www.saucedemo.com",
+        "Log in as standard_user with password secret_sauce, add the Sauce Labs Backpack to the cart and go through "
+        "checkout up to the overview page using first name Asha, last name Rao and postal code 110001. Do not finish.",
+        both(url_has("checkout-step-two"), has("sauce labs backpack")),
+    ),
+    "drag_columns": (
+        "https://the-internet.herokuapp.com/drag_and_drop",
+        "Drag column A onto column B.",
+        lambda r: r["text"].split("Drag and Drop", 1)[-1].strip().startswith("B"),
+    ),
+    "drag_droppable": (
+        "https://jqueryui.com/droppable/",
+        "In the demo, drag the small box onto the big target box.",
+        has("dropped!"),
+    ),
+    "embedded_video_title": (
+        "https://www.w3schools.com/html/tryit.asp?filename=tryhtml_youtubeiframe",
+        "What is the title of the YouTube video shown in the result frame?",
+        lambda r: bool(r["answer"]) and embedded_title()[:12].lower() in r["answer"].lower(),
+    ),
+    "wolfram_derivative": (
+        "https://www.wolframalpha.com",
+        "Compute the derivative of x^2 when x = 5.6.",
+        answer_matches(r"11\.2"),
+    ),
+    # More of Online-Mind2Web's domains.
+    "finance_quote": (
+        None,
+        "What is the current value of the NIFTY 50 index on Google Finance?",
+        both(url_has("google.com/finance"), answer_matches(r"\d{2},?\d{3}")),
+    ),
+    "imdb_rating": (None, "What is the IMDb rating of The Shawshank Redemption?", answer_matches(r"9\.[23]")),
+    "coursera_course": (
+        "https://www.coursera.org",
+        "Search for machine learning courses and open the first result.",
+        lambda r: re.search(r"coursera\.org/(learn|specializations|professional-certificates)/", r["url"]) is not None,
+    ),
+    "gov_vat": (
+        None,
+        "On GOV.UK, find the standard rate of VAT in the UK.",
+        both(url_has("gov.uk"), answer_matches(r"20\s?%")),
+    ),
+    "nhs_flu": (
+        None,
+        "On the NHS website, find the main symptoms of flu.",
+        both(url_has("nhs.uk"), answer_matches(r"fever|temperature")),
+    ),
+    "sport_section": (None, "Open the football section of BBC Sport.", url_has("bbc.com/sport/football")),
+    "recipe_time": (
+        None,
+        "Find a chicken tikka masala recipe on BBC Good Food and tell me how long it takes to cook.",
+        both(url_has("bbcgoodfood.com"), answer_matches(r"tikka"), answer_matches(r"\d+\s*(min|hr|hour)")),
+    ),
+    "airline_baggage": (
+        None,
+        "Find the weight of the checked baggage allowance for economy class on Qatar Airways.",
+        both(url_has("qatarairways.com"), answer_matches(r"\d+\s?kg")),
+    ),
     "flights": (
         "https://www.google.com/travel/flights?hl=en",
         "Find one-way flights from Zurich to London on November 20, 2026, for one adult in economy. "
@@ -464,6 +542,7 @@ def run(name, start, goal, check, options=None):
                     pass
             except Exception as exc:  # noqa: BLE001 - the suite records every failure and keeps going
                 error = f"{type(exc).__name__}: {exc}"
+                result["traceback"] = traceback.format_exc()[-3000:]
             result.update(finished(agent, agent.snapshot(), error))
             passed = not error and result["status"] == "done" and check(result)
             if passed and "follow_up" in options:

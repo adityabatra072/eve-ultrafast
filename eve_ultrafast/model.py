@@ -5,6 +5,7 @@ import math
 import os
 import re
 import time
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -99,7 +100,7 @@ def action_space(actions):
     elements, indices, targets, controls = [], {}, {}, {}
     operations = {
         "click": "CLICK", "fill": "TYPE_TEXT", "select": "SELECT",
-        "hover": "HOVER", "upload": "UPLOAD", "key": "PRESS_KEY",
+        "hover": "HOVER", "upload": "UPLOAD", "key": "PRESS_KEY", "drag": "DRAG", "drop": "DROP",
     }
     for action in actions:
         kind = action["kind"]
@@ -173,11 +174,22 @@ def history_text(history):
     return "\n".join(lines) or "none"
 
 
+def today():
+    """The date, so goals like "next month" or "this Friday" mean something."""
+    return datetime.now().strftime("%A, %d %B %Y")
+
+
+# Choices that change a form without submitting it: picked dates, options, ticked boxes.
+FORM_ROLES = {"checkbox", "radio", "option", "gridcell", "switch", "combobox"}
+
+
 def unsubmitted(history):
-    """Fields typed since the last button or link click. Typing alone rarely applies a search."""
+    """Fields typed, dates picked and options chosen since the last button or link click. None of them applies
+    a search on its own."""
     fields = []
     for h in history:
-        if h.get("kind") == "fill" and h.get("action") not in fields:
+        changed = h.get("kind") in {"fill", "select"} or (h.get("kind") == "click" and h.get("role") in FORM_ROLES)
+        if changed and h.get("action") not in fields:
             fields.append(h["action"])
         elif h.get("kind") in {"navigate", "enter", "back"} or (
             h.get("kind") == "click" and h.get("role") in {"button", "link"}
@@ -334,7 +346,12 @@ def decide(state, goal, history):
         "HOVER": "Move the pointer over an element to reveal a menu, caption or tooltip that is hidden until then.",
         "UPLOAD": "Attach one of the files the user provided to a file input.",
         "PRESS_KEY": "Press one keyboard key, such as Escape to close a popup or ArrowDown to move through a list.",
+        "DRAG": "Drag one element and drop it on another (reorder a list, move a card, drop into a box).",
     }
+    # Drop zones are the second half of DRAG, never an operation of their own.
+    drops = targets.pop("DROP", {})
+    if not drops:
+        targets.pop("DRAG", None)
     files = sorted({Path(a["value"]).name for a in targets.get("UPLOAD", {}).values()})
     if files:
         labels["UPLOAD"] = f"Attach {', '.join(files)} (the user's file) to a file input that has no file yet."
@@ -350,6 +367,8 @@ def decide(state, goal, history):
     }
     for operation, candidates in targets.items():
         questions.update(target_heads(goal, operation, candidates))
+    if "DRAG" in targets:
+        questions.update(target_heads(goal, "DROP", drops))
     body = {
         "model": os.environ.get("EVE_MODEL", "eve"),
         "state": {
@@ -357,6 +376,7 @@ def decide(state, goal, history):
             "elements": element_table(elements),
             "recent_actions": history_text(history[-10:]),
             "typed_not_yet_submitted": unsubmitted(history),
+            "today": today(),
             "visited_pages": visited_pages(state["url"], history),
             **({"files_not_attached": state["files_not_attached"]} if "files_not_attached" in state else {}),
         },
@@ -369,6 +389,7 @@ def decide(state, goal, history):
     operation = operation_answer["choice"]
     target = None
     target_answer = None
+    drop = None
     probabilities = {}
     rounds = 1
     usage = dict(result.get("usage", {}))
@@ -383,11 +404,16 @@ def decide(state, goal, history):
         target = target_answer["choice"]
         choice = candidates[target]["id"]
         probabilities = {candidates[i]["id"]: p for i, p in target_answer["probabilities"].items()}
+        if operation == "DRAG":
+            drop_answer, later = pick_target(url, body, result, "DROP", drops)
+            rounds += len(later)
+            drop = drops[drop_answer["choice"]]["id"]
     else:
         choice = controls[operation]["id"] if operation in controls else operation
         probabilities[choice] = operation_answer["probabilities"][operation]
     return {
         "choice": choice,
+        "drop": drop,
         "operation": operation,
         "target": target,
         "confidence": operation_answer["confidence"],
@@ -407,6 +433,7 @@ def decide(state, goal, history):
 def field_context(goal, action, page, history):
     return {
         "goal": goal,
+        "today": today(),
         "field": {k: action[k] for k in ("label", "role", "value", "input_type", "min", "max", "step") if k in action},
         "page": {"title": page["title"], "text": page["text"][:6000]},
         "recent_actions": [{k: h.get(k) for k in ("action", "text")} for h in history[-6:]],
@@ -416,12 +443,13 @@ def field_context(goal, action, page, history):
 def navigate_context(goal, page, history):
     return {
         "goal": goal,
+        "today": today(),
         "page": {"url": page["url"], "title": page["title"], "text": page["text"][:3000]},
         "recent_actions": [{k: h.get(k) for k in ("action", "text")} for h in history[-6:]],
     }
 
 
-def helper(system, context, field):
+def helper(system, context, field, image=None):
     """Ask the small OpenAI-compatible model for one JSON string field. Returns (value or None, metadata)."""
     key = os.environ.get("TEXT_MODEL_API_KEY") or api_key(required=False)
     if not key:
@@ -446,7 +474,10 @@ def helper(system, context, field):
             **reasoning,
             "messages": [
                 {"role": "system", "content": system},
-                {"role": "user", "content": json.dumps(context)},
+                {"role": "user", "content": json.dumps(context) if not image else [
+                    {"type": "text", "text": json.dumps(context)},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image}"}},
+                ]},
             ],
         },
     )
@@ -504,18 +535,21 @@ def relevant(text, goal, limit):
     return "\n…\n".join(chunks[i] for i in sorted(keep))
 
 
-def final_answer(goal, page, history, earlier=(), downloads=()):
+def final_answer(goal, page, history, earlier=(), downloads=(), image=None):
     """What the user asked for, read off the final page and short excerpts of pages visited before it.
 
     Returns (answer or None, metadata)."""
     context = {
         "goal": goal,
+        "today": today(),
         "page": {"url": page["url"], "title": page["title"], "text": relevant(page["text"], goal, 16000)},
         "earlier_pages": [{"url": url, "text": relevant(text, goal, 4000)} for url, text in earlier][-5:],
         "files_downloaded": [str(DOWNLOADS / name) for name in downloads],
         "recent_actions": [{k: h.get(k) for k in ("action", "text")} for h in history[-8:]],
     }
-    value, meta = helper(ANSWER_VALUE, context, None)
+    if image:
+        context["screenshot"] = "attached: the visible part of the final page"
+    value, meta = helper(ANSWER_VALUE, context, None, image=image)
     return value or {}, meta
 
 

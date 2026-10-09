@@ -190,7 +190,7 @@ def test_history_reaches_the_model_as_numbered_lines_with_unsubmitted_fields():
         {"action": "Free cancellation", "kind": "click", "role": "checkbox", "text": None, "page_changed": False},
     ]
     assert model.history_text(history) == '1. fill Destination "Lisbon"\n2. click Free cancellation (no visible change)'
-    assert model.unsubmitted(history) == "Destination"
+    assert model.unsubmitted(history) == "Destination, Free cancellation"
     history.append({"action": "Find stays", "kind": "click", "role": "button", "text": None, "page_changed": True})
     assert model.unsubmitted(history) == "none"
     assert model.history_text([]) == "none"
@@ -830,3 +830,46 @@ def test_an_action_that_changed_nothing_is_not_offered_again_on_the_same_page(ru
     monkeypatch.setattr(loop, "choose", lambda p, _g, _h: seen.append(p) or decision("e1"))
     runner.command("predict", {})
     assert "e3" not in {a["id"] for a in seen[0]["actions"]}
+
+
+def test_drag_asks_for_source_and_drop_zone_in_one_request(monkeypatch):
+    p = page()
+    p["actions"][:0] = [
+        {"id": "d1", "kind": "drag", "label": "Card", "role": "draggable", "node": 70},
+        {"id": "z1", "kind": "drop", "label": "Done column", "role": "drop zone", "node": 71},
+        {"id": "z2", "kind": "drop", "label": "Doing column", "role": "drop zone", "node": 72},
+    ]
+    calls = []
+
+    def post(_url, _key, body):
+        calls.append(body)
+        q = body["questions"]
+        assert "drop_target" in q and "DROP" not in q["operation"]["criteria"]
+        return {"model": "eve", "answers": {
+            "operation": choice(q["operation"]["criteria"], "DRAG"),
+            "drop_target": choice(q["drop_target"]["criteria"], "2"),
+        }}
+
+    monkeypatch.setenv("RUNANYWHERE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", post)
+    d = model.choose(p, "Move the card to Done", [])
+    assert len(calls) == 1 and d["choice"] == "d1" and d["drop"] == "z1"
+
+
+def test_drag_is_not_offered_without_a_drop_zone(monkeypatch):
+    p = page()
+    p["actions"].insert(0, {"id": "d1", "kind": "drag", "label": "Card", "role": "draggable", "node": 70})
+    monkeypatch.setenv("RUNANYWHERE_API_KEY", "test")
+    monkeypatch.setattr(model, "post_json", lambda _u, _k, body: {"model": "eve", "answers": {
+        "operation": choice(body["questions"]["operation"]["criteria"], "WAIT")}})
+    assert "DRAG" not in model.choose(p, "x", [])["operation_probabilities"]
+
+
+def test_a_helper_that_gives_no_value_twice_sets_the_field_aside(runner, monkeypatch):
+    helper = Mock(side_effect=ValueError("no value"))
+    monkeypatch.setattr(loop, "field_text", helper)
+    with pytest.raises(StalePage):
+        runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    assert helper.call_count == 2
+    assert (runner.state["page"]["fingerprint"], "e1") in runner.unavailable
+    runner.state["browser"].act.assert_not_called()
