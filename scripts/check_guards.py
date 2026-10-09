@@ -162,6 +162,11 @@ CAPABILITIES = """<!doctype html><title>Capabilities</title>
 <a href="data:text/plain,eve" download="eve-guard-download.txt">Download notes</a>
 <iframe title="Example" src="https://example.com/" style="width:320px;height:160px"></iframe>
 <table><tr><th style="cursor:pointer" onclick="window.sorted=1">Due</th></tr></table>
+<table><tr><td>7.</td><td><a href="#s7">Seventh story</a></td></tr>
+<tr><td></td><td><a href="#c7">12 comments</a></td></tr>
+<tr><td>8.</td><td><a href="#s8">Eighth story</a></td></tr></table>
+<ol start="4"><li><a href="#r4">Fourth result</a></li></ol>
+<ol style="list-style:none"><li><a href="#menu">Menu entry</a></li></ol>
 <img alt="Avatar" width="30" height="30"><img alt="Avatar" width="30" height="30">
 <secret-box></secret-box>
 <script>customElements.define('secret-box', class extends HTMLElement { constructor() { super();
@@ -179,6 +184,10 @@ def capabilities(passed):
     try:
         time.sleep(1)
         page = browser.observe(screenshot=False)
+        labels = {a["label"] for a in page["actions"]}
+        assert {"Seventh story (item 7)", "12 comments (item 7)", "Eighth story (item 8)",
+                "Fourth result (item 4)", "Menu entry"} <= labels, labels
+        passed.append("controls in a numbered list carry their item number")
         inside = next(a for a in page["actions"] if a["label"] == "Inside frame")
         browser.act(inside, page)
         assert browser.evaluate("window.frameClicks") == 1

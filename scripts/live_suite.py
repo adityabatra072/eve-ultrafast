@@ -875,6 +875,28 @@ def finished(agent, state, error):
     }
 
 
+TRACES = None
+
+
+def save_decisions(name, state):
+    """What EVE saw and chose at each step, so a miss can be traced to a page change or a wrong pick."""
+    if TRACES is None:
+        return
+    steps = []
+    for d in state.get("decisions", []):
+        seen = d.get("request", {}).get("state", {})
+        steps.append({
+            "url": seen.get("page", {}).get("url"),
+            "elements": seen.get("elements"),
+            "recent_actions": seen.get("recent_actions"),
+            "operation": d.get("operation"),
+            "target": d.get("target"),
+            "confidence": d.get("confidence"),
+        })
+    count = len(list(TRACES.glob(f"{name}-*.json")))
+    (TRACES / f"{name}-{count + 1}.json").write_text(json.dumps(steps, indent=1, ensure_ascii=False))
+
+
 def run(name, start, goal, check, options=None):
     options = options or {}
     started = time.perf_counter()
@@ -890,6 +912,7 @@ def run(name, start, goal, check, options=None):
                 error = f"{type(exc).__name__}: {exc}"
                 result["traceback"] = traceback.format_exc()[-3000:]
             result.update(finished(agent, agent.snapshot(), error))
+            save_decisions(name, agent.snapshot())
             passed = not error and result["status"] == "done" and check(result)
             if passed and "follow_up" in options:
                 # The same tab gets a second goal, as a person would ask a follow-up question.
@@ -922,6 +945,9 @@ def main():
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     folder = Path("artifacts/live-suite") / f"{stamp}-{os.getpid()}"
     folder.mkdir(parents=True, exist_ok=True)
+    global TRACES
+    TRACES = folder / "decisions"
+    TRACES.mkdir()
     results = []
     for name in names:
         for _ in range(args.n):

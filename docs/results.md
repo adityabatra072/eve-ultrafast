@@ -17,6 +17,8 @@ After that run, three fixes followed (identical submit buttons told apart by the
 
 One guard also changed after the regression pass: a run now gives up after six actions in a row that change nothing, not three, because each one is already set aside and the next choice is a different one. That fixed the Google search miss (3 of 3 afterwards).
 
+**Numbered lists.** The Hacker News rank-20 misses had a general cause: the links under a story ("181 comments", "hide") carried no story number, so EVE had to count rows. Controls in a numbered list (an `<ol>` that shows its numbers, or a table whose rows start with "20.") now carry `(item 20)`, and the row of links under a numbered row takes its number. Rank 20 then passed 3 of 3 in one action each, and 23 other list, table and search tasks still passed. The suite now saves what EVE saw and chose at every step in `decisions/`, so a miss can be traced to a page change or a wrong pick.
+
 Pages that ask for human verification (Cloudflare, CAPTCHAs) are not solved by design; in these headless runs the agent stops and says so, and with a visible window it waits for a person. Wall-clock speed is left out: the runs went from a machine about 270 ms from Wally's gateway.
 
 The table below is from an earlier complete run of the first 68 tasks on a previous version (189 of 204 runs passed).

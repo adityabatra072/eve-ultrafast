@@ -217,6 +217,27 @@
     const month=(table?.caption?.innerText||'').match(months) || (scope?.innerText||'').slice(0,400).match(months);
     if (month) a.label+=' '+month[0];
   }
+  // Controls in a numbered list ("20. Some story", an <ol> showing its numbers) say which item they belong to,
+  // so "open the 20th result" needs no counting. A table row with no number of its own (the line of links
+  // under a ranked row) takes the number of the row just above it.
+  const itemNumber=e => {
+    const li=e.closest('li');
+    if (li?.parentElement?.tagName==='OL' && getComputedStyle(li).listStyleType!=='none') {
+      const items=[...li.parentElement.children].filter(c => c.tagName==='LI');
+      return (li.parentElement.start||1)+items.indexOf(li);
+    }
+    let row=e.closest('tr');
+    for (let up=0; row && up<2; up++, row=row.previousElementSibling) {
+      const first=[...row.cells].find(c => c.innerText.trim());
+      const rank=first?.innerText.trim().match(/^(\d{1,4})\.$/);
+      if (rank) return +rank[1];
+    }
+    return null;
+  };
+  for (const a of actions) {
+    const n=cache.nodes.get(a.node) && itemNumber(cache.nodes.get(a.node));
+    if (n) a.label+=` (item ${n})`;
+  }
   // Identical labels ("Add to cart", "Reply", "Toggle Todo") get their row's text so each target is distinct.
   // Counted per operation: the same card as a drag source and a drop zone is not ambiguous.
   const key=a=>a.kind+'|'+a.label, counts={};
