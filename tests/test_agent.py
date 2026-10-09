@@ -967,3 +967,15 @@ def test_ordinary_pages_are_not_site_errors():
     article = "Something went wrong in our deploy. " + "Details of the incident and the fix. " * 100
     assert site_error({"title": "Postmortem", "text": article}) is None
     assert site_error({"title": "504 Gateway Time-out", "text": ""}) == "504 gateway time-out"
+
+
+
+def test_done_with_unsent_fields_and_a_search_button_goes_back_to_work(runner, monkeypatch):
+    found = ({"answer": "Dates are in the box", "complete": True}, {"model": "t"})
+    monkeypatch.setattr(loop, "final_answer", Mock(return_value=found))
+    runner.rechecks = 0
+    runner.state["history"] = [{"kind": "click", "role": "checkbox", "action": "Friday, November 20", "url": "u"}]
+    runner.state["page"]["actions"].append({"id": "s", "kind": "click", "label": "Search", "node": 90})
+    runner.finish("done", runner.state["page"])
+    assert runner.state["status"] == "ready"
+    assert "submit the changed fields" in runner.state["history"][-1]["action"]

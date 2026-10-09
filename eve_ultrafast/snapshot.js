@@ -21,7 +21,10 @@
       .map(id=>name(document.getElementById(id),seen)).filter(Boolean).join(' ');
     return referenced || e.getAttribute('aria-label') ||
       [...(e.labels||[])].map(l=>name(l,seen)).filter(Boolean).join(' ') ||
-      (['button','submit','reset'].includes(e.type) ? e.value : '') || e.getAttribute('alt') ||
+      (['button','submit','reset'].includes(e.type) ? e.value : '') ||
+      // An <input type=submit> without a value shows the browser's own label.
+      (e.tagName==='INPUT' ? {submit:'Submit',reset:'Reset'}[e.type] || '' : '') ||
+      e.getAttribute('alt') ||
       (e.tagName==='INPUT' ? '' : [...e.childNodes].map(n=>n.nodeType===3 ? n.textContent :
         n.nodeType===1 && n.getAttribute('aria-hidden')!=='true' ? name(n,seen) : '').join(' ').trim()) ||
       e.getAttribute('title') || e.getAttribute('placeholder') || '';
@@ -220,7 +223,7 @@
   for (const a of actions) counts[key(a)]=(counts[key(a)]||0)+1;
   for (const a of actions) {
     if (counts[key(a)]<2) continue;
-    const row=cache.nodes.get(a.node)?.closest('li,tr,[role="row"],[role="listitem"],article');
+    const row=cache.nodes.get(a.node)?.closest('li,tr,[role="row"],[role="listitem"],article,form');
     const context=row?.innerText.replace(/\s+/g,' ').trim().slice(0,90);
     if (context && context!==a.label) a.label+=' · '+context;
   }

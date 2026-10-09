@@ -1,6 +1,7 @@
 """The complete agent loop. Typed choices, observable state, bounded execution."""
 
 import base64
+import re
 import threading
 import time
 from pathlib import Path
@@ -17,6 +18,7 @@ from .model import (
     final_answer,
     navigate_context,
     page_url,
+    unsubmitted,
     warm,
 )
 from .questions import MAX_STEPS
@@ -385,6 +387,13 @@ class Agent:
             verdict = {}
         answer = verdict.get("answer")
         # The answer step reads every page the run saw, so it doubles as a check on EVE's DONE.
+        # Changed fields with a submit button still on screen mean the search or form was never sent.
+        pending = unsubmitted(state["history"])
+        submit = re.compile(r"\b(search|apply|submit|find|update|show results|continue)\b", re.I)
+        buttons = [a.get("label", "") for a in page.get("actions", []) if a.get("kind") == "click"]
+        if (status == "done" and pending != "none" and getattr(self, "rechecks", 0) < 2
+                and any(submit.search(label) for label in buttons)):
+            verdict = {**verdict, "complete": False, "missing": f"submit the changed fields ({pending[:120]})"}
         # A premature BLOCKED (giving up on the first page) gets the same second look.
         if verdict.get("complete") is False and getattr(self, "rechecks", 0) < 2 and not reason:
             self.rechecks = getattr(self, "rechecks", 0) + 1
