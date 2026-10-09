@@ -18,12 +18,13 @@ TYPE_TEXT sends the goal, selected field, visible page context, and recent actio
 
 ## Frames, shadow DOM, hover, files and dialogs
 
-- **Frames.** Same-origin frames (w3schools "Try it" results, jQuery UI demos, nested framesets) are read like the page: their controls carry the frame's offset, and the executor hit-tests inside the frame. A cross-origin frame cannot be read, so it shows up as one action that opens its address in the tab.
+- **Frames.** Same-origin frames (w3schools "Try it" results, jQuery UI demos, nested framesets) are read like the page: their controls carry the frame's offset, and the executor hit-tests inside the frame. Chrome runs cross-origin frames in their own process, out of the page script's reach, so the agent attaches to each one's `iframe` target, runs the same snapshot there and places its controls by the frame's box (`DOM.getFrameOwner`, `DOM.getBoxModel`). Clicks and keys still go to the page at the translated position; freshness is checked in the frame's own session. An action to open the frame's address by itself remains as a fallback.
 - **Shadow DOM.** Open shadow roots are searched for controls and text, and hit tests run inside the root that owns the element.
 - **Hover.** Menus, dropdown parents and figures that hide a link or caption until hovered become `HOVER` targets. Moving the pointer away from a hover can close a menu and shift the page, so while the pointer rests from a hover the next click first moves there, waits a moment and measures again.
 - **Uploads.** File inputs are offered only when the caller passes `files=[...]` to `Agent`; each allowed file becomes one choice, and the executor sets it through CDP. The state lists `files_not_attached`, because without it EVE clicked a button named Upload before attaching anything.
 - **Downloads.** Chrome saves downloads to `~/Downloads/eve-ultrafast` (`EVE_DOWNLOADS` changes it). A click that saves a file records it, and the answer names it. `SAVE_PDF` prints the page to an A4 PDF in the same folder.
 - **Dialogs.** An open alert, confirm or prompt freezes the page, so the agent checks for one before reading the page. While one is open, EVE sees the dialog as the page, with OK and Cancel as its only controls; a prompt's reply comes from the text helper.
+- **Drag and drop.** `DRAG` asks two heads in one request: what to drag (`draggable` elements, sortable items, jQuery UI draggables) and where to drop it (drop zones and the other draggables). `draggable="true"` elements get the HTML5 drag events in order, since CDP mouse input does not start a native drag; anything else gets a pointer press, a ten-step move and a release. The history records "A → B", so EVE can see the drop happened.
 - **Keys.** `PRESS_KEY` is one more head with a fixed list (Escape, Tab, arrows, Page Up/Down, Home, End, Space, Backspace, Delete).
 - **Dates and sliders.** Date, time and range inputs take a formatted value set through the element's own setter; the text helper gets the input type and, for a slider, its min, max and step.
 - **Script-wired controls.** Table headers, links without `href` and elements with click-handler attributes are offered even though they are not buttons, and the screen is sampled for anything with a pointer cursor.
@@ -55,6 +56,10 @@ Live runs on public sites turned up a handful of patterns the original fixtures 
 - Menu items and grid cells that wrap their own link or checkbox were offered twice, so EVE could pick the inert container. The container is skipped, and labels have their whitespace collapsed.
 - An action that visibly changed nothing is set aside until the page changes, so EVE tries something else instead of clicking the same search box three times. A target the executor refused is set aside the same way, per page state.
 - Live clocks and tickers kept every decision stale. Actions that aim at no element (scroll, keys, navigation, waiting, DONE) no longer need the page to be unchanged, and typing uses the field's own guard.
+- A page reached through a login redirect stopped receiving CDP mouse input after a few seconds, while Playwright's quick clicks still landed. The executor now watches for the press or click it sent; if the page saw neither, it clicks the element through the DOM. A page that saw the press is never clicked twice.
+- A click on a real link waits for the page it opens (up to 15 seconds on slow servers) instead of reading the old page again.
+- When EVE cannot find the page a goal needs, it can NAVIGATE, and the text helper may write a DuckDuckGo search limited to the named site. Qatar Airways' baggage allowance went from unreachable to two actions this way.
+- A NAVIGATE that lands on a 404 sends EVE back to the site's home page.
 - Password inputs are offered for typing. The snapshot reports only `filled` or empty and never reads a password back off the page. A password you put in the goal still shows up where the agent typed it: the trace and the decision trail.
 
 ## Fitting EVE's limits

@@ -4,9 +4,11 @@ Decisions: `eve` on Wally through `POST /v1/systemone`. Text, addresses and answ
 
 ## The live suite
 
-`uv run python scripts/live_suite.py` runs 68 tasks on public websites. The task list comes from the use cases in [use-cases.md](use-cases.md), which draws on Browser Use's examples, Online-Mind2Web, WebVoyager and Browser Harness skills.
+`uv run python scripts/live_suite.py` runs 82 tasks on public websites. The task list comes from the use cases in [use-cases.md](use-cases.md), which draws on Browser Use's examples, Online-Mind2Web, WebVoyager and Browser Harness skills.
 
-The final run on the final code ran every task 3 times: **189 of 204 runs passed, and 61 of 68 tasks passed all 3 times.**
+**Current state.** A 3× run of all 82 tasks on the current code was cut short after 116 of 246 runs; 114 of those passed. One failure was Cambridge Dictionary's Cloudflare check. The other was an Amazon run that stopped with a `TypeError`; three more Amazon runs did not reproduce it, and it is still open. The 14 tasks added last (logins, drag and drop, a cross-origin embed, an image-only answer, finance, entertainment, education, government, health, sport, food and an airline) passed when run on their own after their fixes, as did repeat runs of Google Flights and Booking.com (3/3 each).
+
+**The last complete run** covered the 68 earlier tasks on the previous version, 3 times each: 189 of 204 runs passed and 61 of 68 tasks passed all 3 times. The table below is from that run.
 
 | Kind | Tasks | Result |
 | --- | --- | --- |

@@ -24,7 +24,7 @@ Every observation produces a new element table:
 ...
 ```
 
-The operations are `CLICK`, `TYPE_TEXT`, `SELECT`, `HOVER`, `UPLOAD`, `PRESS_KEY`, `SCROLL_UP`, `SCROLL_DOWN`, `WAIT`, `PRESS_ENTER`, `GO_BACK`, `NAVIGATE`, `SAVE_PDF`, `DONE`, and `BLOCKED`. The agent offers only operations and targets the page supports: `PRESS_ENTER` right after typing, `GO_BACK` once it has left a page, `UPLOAD` when you passed files, `HOVER` for menus and captions that only appear under the pointer. `NAVIGATE` opens a different website: EVE decides when, and the text helper writes the address. An open alert, confirm or prompt becomes the page, with OK and Cancel as its controls.
+The operations are `CLICK`, `TYPE_TEXT`, `SELECT`, `HOVER`, `DRAG`, `UPLOAD`, `PRESS_KEY`, `SCROLL_UP`, `SCROLL_DOWN`, `WAIT`, `PRESS_ENTER`, `GO_BACK`, `NAVIGATE`, `SAVE_PDF`, `SAVE_FILE`, `DONE`, and `BLOCKED`. The agent offers only operations and targets the page supports: `PRESS_ENTER` right after typing, `GO_BACK` once it has left a page, `UPLOAD` when you passed files, `HOVER` for menus and captions that only appear under the pointer, `DRAG` when the page has something to drag and somewhere to drop it (EVE picks both in one request). `NAVIGATE` opens a different website: EVE decides when, and the text helper writes the address. An open alert, confirm or prompt becomes the page, with OK and Cancel as its controls.
 
 ```text
                         one EVE request
@@ -126,9 +126,9 @@ Every executed target resolves from an observed node. Model output never becomes
 
 ## Limits
 
-The agent works in one tab. Links that would open a new tab open in that tab instead, and a pop-up a click still opens gets loaded there and closed. Same-origin frames and open shadow roots are read like the page; a cross-origin frame (an embedded form or map) can be opened by itself. Downloads land in `~/Downloads/eve-ultrafast`, and PDFs the tab opens are read for the answer. Password fields work. The agent never reads a password back off the page, though one you put in the goal appears in the trace where it was typed. An element the browser refuses to operate (covered, disabled) is dropped for that page and EVE chooses again.
+The agent works in one tab. Links that would open a new tab open in that tab instead, and a pop-up a click still opens gets loaded there and closed. Frames are read like the page, cross-origin ones (embedded forms, video players, widgets) included, through their own Chrome targets. So are open shadow roots. Downloads land in `~/Downloads/eve-ultrafast`, and PDFs the tab opens are read for the answer. When the facts are drawn rather than written (a chart, a canvas, an image result), the answer step gets a screenshot. Password fields work. The agent never reads a password back off the page, though one you put in the goal appears in the trace where it was typed. An element the browser refuses to operate (covered, disabled) is dropped for that page and EVE chooses again.
 
-The answer step also checks the run: a `DONE` it judges incomplete goes back to work, and its answer still deserves a look when it matters. The DOM reader handles common HTML and ARIA controls, not the full accessible-name spec. Cross-origin frames are not read in place, closed shadow roots and canvas apps stay invisible, and drag-and-drop is not supported. `NAVIGATE` addresses come from the text helper's knowledge, so a guessed deep link can land on a missing page; the agent then works from there. Owned tabs share whichever Chrome profile you connect, including its logins.
+The answer step also checks the run: a `DONE` it judges incomplete goes back to work, and its answer still deserves a look when it matters. The DOM reader handles common HTML and ARIA controls, not the full accessible-name spec. EVE decides from text, so a canvas app (a map, a design tool, a game) can be read through the screenshot but not operated, and closed shadow roots stay invisible. Logins work in whatever Chrome you connect; the suite tests them on demo sites built for it. `NAVIGATE` addresses come from the text helper's knowledge, so a guessed deep link can land on a missing page; the agent then works from there. Owned tabs share whichever Chrome profile you connect, including its logins.
 
 Google Flights sometimes answers an automated search with "Oops, something went wrong". EVE clicks Reload, which usually recovers. If Google keeps refusing, the run ends `blocked` and the flight check fails.
 
@@ -142,7 +142,7 @@ node --check eve_ultrafast/snapshot.js
 uv build
 ```
 
-Tests run offline. `uv run python scripts/check_guards.py` checks real controls in a local browser without model calls. `uv run python scripts/live_suite.py` runs 68 tasks on public websites, drawn from the use cases in [use-cases.md](docs/use-cases.md), and checks each result on its own; pass task names to run a few, and `-n 3` to repeat them. Live examples, the suite, `scripts/smoke.py`, and the recording scripts make paid API calls. Credentials and raw traces stay out of git.
+Tests run offline. `uv run python scripts/check_guards.py` checks real controls in a local browser without model calls. `uv run python scripts/live_suite.py` runs 82 tasks on public websites, drawn from the use cases in [use-cases.md](docs/use-cases.md), and checks each result on its own; pass task names to run a few, and `-n 3` to repeat them. Live examples, the suite, `scripts/smoke.py`, and the recording scripts make paid API calls. Credentials and raw traces stay out of git.
 
 ---
 

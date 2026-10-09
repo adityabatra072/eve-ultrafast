@@ -28,6 +28,6 @@ The live suite's tasks come from four public sources:
 
 Each category has tasks in `scripts/live_suite.py`, picked so they run without logging in, paying, posting or sending anything, on sites reachable from India. Checks rely on facts that stay put (a URL pattern, a confirmation message, a submitted value, a downloaded file, a number on a static page) or are computed when the check runs (Hacker News's current front page, next month's date).
 
-Logged-in work is left out. The agent can drive a logged-in browser (connect it to your own Chrome), but a public suite cannot hold anyone's accounts.
+Logged-in work is tested on demo sites made for it: the-internet's login and secure area, and SauceDemo's shop from login through checkout. Real accounts are left out of a public suite; the agent drives whatever Chrome you connect, logins included.
 
 Sites left out: Reddit blocks logged-out views, and Wolfram Alpha answers with images, which this agent does not read. Cambridge Dictionary sometimes shows automation a Cloudflare challenge; it stays in the suite, and a run that meets the challenge fails.
