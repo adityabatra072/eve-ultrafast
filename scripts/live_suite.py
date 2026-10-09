@@ -503,6 +503,100 @@ TASKS = {
 }
 
 
+# Written after the agent was tuned and never used for tuning: scored once, to show how it does on goals it has not
+# seen. Run with --holdout.
+HOLDOUT = {
+    "mars_moons": (None, "How many moons does Mars have according to Wikipedia?", answer_matches(r"\b(two|2)\b")),
+    "mdn_gap": (
+        None,
+        "Find the MDN reference page for the CSS gap property.",
+        lambda r: "developer.mozilla.org" in r["url"] and r["url"].rstrip("/").lower().endswith("/gap"),
+    ),
+    "itertools_docs": (
+        None,
+        "Find the Python documentation page for the itertools module.",
+        url_has("docs.python.org", "itertools"),
+    ),
+    "express_version": (
+        None,
+        "What is the latest version of the express package on npm?",
+        both(url_has("npmjs.com/package/express"), answer_matches(r"\d+\.\d+\.\d+")),
+    ),
+    "pypi_requests": (None, "What is the latest version of the requests package on PyPI?", answer_matches(r"\d+\.\d+")),
+    "ask_hn": (
+        "https://news.ycombinator.com",
+        "Open the Ask HN page and open the comments of the first story there.",
+        url_has("news.ycombinator.com/item?id="),
+    ),
+    "sharp_objects": (
+        "https://books.toscrape.com",
+        "What is the price of the book Sharp Objects?",
+        answer_matches(r"47\.82"),
+    ),
+    "inspirational_quote": (
+        "https://quotes.toscrape.com",
+        "Find quotes tagged inspirational and tell me who wrote the first one.",
+        answer_matches(r"einstein"),
+    ),
+    "dynamic_loading": (
+        "https://the-internet.herokuapp.com/dynamic_loading/1",
+        "Start the loading and tell me the text that appears when it finishes.",
+        answer_matches(r"hello world"),
+    ),
+    "dropdown_option": (
+        "https://the-internet.herokuapp.com/dropdown",
+        "Select Option 2 in the dropdown.",
+        lambda r: "2" in r["values"].split(" | "),
+    ),
+    "js_confirm_cancel": (
+        "https://the-internet.herokuapp.com/javascript_alerts",
+        "Click the JS Confirm button and cancel the dialog.",
+        has("you clicked: cancel"),
+    ),
+    "taj_city": (
+        "https://www.openstreetmap.org",
+        "Search for the Taj Mahal and tell me which city it is in.",
+        answer_matches(r"agra"),
+    ),
+    "uk_minimum_wage": (
+        None,
+        "On GOV.UK, find the National Living Wage rate for workers aged 21 and over.",
+        both(url_has("gov.uk"), answer_matches(r"£\s?\d+\.\d\d")),
+    ),
+    "edx_course": (
+        "https://www.edx.org",
+        "Search for Python courses and open the first result.",
+        url_has("edx.org/"),
+    ),
+    "tokyo_population": (
+        None,
+        "What population does Wikipedia give for Tokyo?",
+        answer_matches(r"\d{1,3}([,.]\d{3})+|million"),
+    ),
+    "arxiv_cs_lg": (
+        None,
+        "Open arXiv's listing of new Machine Learning (cs.LG) papers.",
+        url_has("arxiv.org/list/cs.lg"),
+    ),
+    "httpbin_agent": (
+        "https://httpbin.org",
+        "Open the page that shows my user agent and tell me what it says.",
+        both(url_has("httpbin.org"), answer_matches(r"mozilla")),
+    ),
+    "mumbai_weather": (None, "What is the weather in Mumbai right now?", answer_matches(r"°|degree")),
+    "so_python_top": (
+        None,
+        "On Stack Overflow, open the highest-voted question tagged python.",
+        url_has("stackoverflow.com/questions/"),
+    ),
+    "wiki_random_fact": (
+        None,
+        "On Wikipedia, find the year the Golden Gate Bridge opened.",
+        answer_matches(r"1937"),
+    ),
+}
+
+
 def fresh_site(start):
     """Forget what earlier runs left on the start site (to-dos, logins), so each run starts the same."""
     connect()
@@ -588,16 +682,18 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("tasks", nargs="*", help=f"Any of: {', '.join(TASKS)}")
     parser.add_argument("-n", type=int, default=1, help="Runs per task")
+    parser.add_argument("--holdout", action="store_true", help="Run the held-out tasks instead")
     args = parser.parse_args()
     load_environment()
-    names = args.tasks or list(TASKS)
+    tasks = HOLDOUT if args.holdout else TASKS
+    names = args.tasks or list(tasks)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     folder = Path("artifacts/live-suite") / f"{stamp}-{os.getpid()}"
     folder.mkdir(parents=True, exist_ok=True)
     results = []
     for name in names:
         for _ in range(args.n):
-            result = run(name, *TASKS[name])
+            result = run(name, *tasks[name])
             results.append(result)
             mark = "PASS" if result["passed"] else "FAIL"
             print(

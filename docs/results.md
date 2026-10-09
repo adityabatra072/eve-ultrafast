@@ -4,11 +4,13 @@ Decisions: `eve` on Wally through `POST /v1/systemone`. Text, addresses and answ
 
 ## The live suite
 
-`uv run python scripts/live_suite.py` runs 82 tasks on public websites. The task list comes from the use cases in [use-cases.md](use-cases.md), which draws on Browser Use's examples, Online-Mind2Web, WebVoyager and Browser Harness skills.
+`uv run python scripts/live_suite.py` runs 83 tasks on public websites. The task list comes from the use cases in [use-cases.md](use-cases.md), which draws on Browser Use's examples, Online-Mind2Web, WebVoyager and Browser Harness skills.
 
-**Current state.** A 3× run of all 82 tasks on the current code was cut short after 116 of 246 runs; 114 of those passed. One failure was Cambridge Dictionary's Cloudflare check. The other was an Amazon run that stopped with a `TypeError`; three more Amazon runs did not reproduce it, and it is still open. The 14 tasks added last (logins, drag and drop, a cross-origin embed, an image-only answer, finance, entertainment, education, government, health, sport, food and an airline) passed when run on their own after their fixes, as did repeat runs of Google Flights and Booking.com (3/3 each).
+**Latest full run.** All 83 tasks, 3 times each, on the current code: **243 of 249 runs passed (97.6%).** Two runs met Cloudflare's verification page (Cambridge Dictionary, Stack Overflow), and the agent stopped after one action saying so, as designed for a browser nobody is watching. Two Google Flights runs kept hitting Google's "Oops, something went wrong" results page until the 60-action budget. One Apple comparison stopped on Apple's general Mac page instead of the MacBook Air page, and one GitHub commit-history run went into the wrong repository.
 
-**The last complete run** covered the 68 earlier tasks on the previous version, 3 times each: 189 of 204 runs passed and 61 of 68 tasks passed all 3 times. The table below is from that run.
+**Held-out tasks.** `--holdout` runs 20 tasks written after the tuning above and never used for it (Wikipedia facts, MDN, Python docs, npm, PyPI, Ask HN, Books and Quotes to Scrape, dynamic loading, a dropdown, a JS confirm, OpenStreetMap, GOV.UK, edX, arXiv listings, httpbin, weather, Stack Overflow). Scored once, 3 runs each: **54 of 60 passed.** The 6 failures were 3 runs judged by a wrong check (MDN had moved CSS pages to `/Reference/Properties/gap`; the agent opened the right page each time) and 3 runs during a Heroku "Application error" outage of the-internet. After correcting that check, and once the site was back, both tasks passed 3 of 3, with no change to the agent.
+
+The table below is from an earlier complete run of the first 68 tasks on a previous version (189 of 204 runs passed).
 
 | Kind | Tasks | Result |
 | --- | --- | --- |
