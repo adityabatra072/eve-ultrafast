@@ -18,6 +18,8 @@ from browser_harness.helpers import cdp
 READ_STATE = Path(__file__).with_name("snapshot.js").read_text()
 MARKER = f"(() => {{ const state={READ_STATE}; return state?.marker ?? null; }})()"
 
+# Browser Harness gives a CDP call 5 seconds. A slow site can take longer just to accept a navigation.
+NAVIGATION_TIMEOUT = 30
 CHROME_PORT = int(os.environ.get("EVE_CHROME_PORT", "9333"))
 CHROME_PROFILE = Path.home() / ".cache" / "eve-ultrafast" / "chrome"
 CHROME_BINARIES = (
@@ -32,6 +34,10 @@ CHROME_BINARIES = (
 
 class StalePage(ValueError):
     """A decision no longer refers to the observed page."""
+
+
+class Unavailable(StalePage):
+    """The executor refused a target before any input. The agent stops offering it on that page."""
 
 
 def listening(port):
@@ -94,14 +100,21 @@ class Browser:
         self.call("Emulation.setDeviceMetricsOverride", width=1120, height=780, deviceScaleFactor=1, mobile=False)
         # Keep rAF/menus rendering in an owned background tab, without activating the user's Chrome tab.
         self.call("Emulation.setFocusEmulationEnabled", enabled=True)
-        self.call("Page.navigate", url=url)
+        try:
+            self.call("Page.navigate", url=url, _response_timeout=NAVIGATION_TIMEOUT)
+        except TimeoutError:
+            self.wait_for_navigation("about:blank")
         self.wait_for_load()
 
     def call(self, method, **params):
         return cdp(method, session_id=self.session, **params)
 
     def evaluate(self, expression):
-        response = self.call("Runtime.evaluate", expression=expression, returnByValue=True)
+        try:
+            response = self.call("Runtime.evaluate", expression=expression, returnByValue=True)
+        except TimeoutError:
+            # A page busy navigating can leave an evaluation unanswered; observe it again.
+            raise StalePage("Page did not answer in time") from None
         if response.get("exceptionDetails"):
             raise StalePage("Document changed during evaluation")
         return response.get("result", {}).get("value")
@@ -137,18 +150,20 @@ class Browser:
                     awaitPromise=True,
                     returnByValue=True,
                 )
-            except RuntimeError:
+            except (RuntimeError, TimeoutError):
                 pass
-        for attempt in range(10):
+        # Heavy pages (YouTube, say) can stay mid-navigation for seconds. Back off instead of giving up.
+        deadline, attempt = time.monotonic() + 10, 0
+        while True:
             try:
                 return browser_operation(
                     {"operation": "observe", "session": self.session, "screenshot": screenshot}
                 )
             except StalePage:
-                if attempt == 9:
+                if time.monotonic() > deadline:
                     raise
-                time.sleep(0.02)
-        raise StalePage("Page did not settle")
+                time.sleep(min(0.02 * 2**attempt, 0.25))
+                attempt += 1
 
     def fresh(self, page, action=None):
         if action is not None and action["kind"] in {"click", "select"}:
@@ -168,10 +183,52 @@ class Browser:
         if action["kind"] == "wait":
             time.sleep(0.1)
         result = browser_operation({"operation": "act", "session": self.session, "action": action, "text": text})
-        self.after_input = action if action["kind"] not in {"wait", "navigate"} else None
-        if action["kind"] == "navigate":
+        self.after_input = action if action["kind"] not in {"wait", "navigate", "enter", "back"} else None
+        if action["kind"] == "navigate" and text != page["url"]:
+            self.wait_for_navigation(page["url"])
+        if action["kind"] in {"navigate", "enter", "back"}:
             self.wait_for_load()
+        if action["kind"] == "click":
+            self.adopt_popups()
         return result
+
+    def adopt_popups(self):
+        """A click that still opened a tab (window.open, say): load its page here and close it."""
+        try:
+            self._adopt_popups()
+        except TimeoutError:
+            pass
+
+    def _adopt_popups(self):
+        popups = [
+            t for t in cdp("Target.getTargets").get("targetInfos", [])
+            if t.get("openerId") == self.target and t.get("type") == "page"
+        ]
+        for popup in popups:
+            url, deadline = popup.get("url", ""), time.monotonic() + 2
+            while url in {"", "about:blank"} and time.monotonic() < deadline:
+                time.sleep(0.05)
+                info = cdp("Target.getTargetInfo", targetId=popup["targetId"]).get("targetInfo", {})
+                url = info.get("url", "")
+            cdp("Target.closeTarget", targetId=popup["targetId"])
+            if url.startswith(("http://", "https://")):
+                try:
+                    self.call("Page.navigate", url=url, _response_timeout=NAVIGATION_TIMEOUT)
+                except TimeoutError:
+                    pass
+                self.wait_for_load()
+                self.after_input = None
+
+    def wait_for_navigation(self, before, seconds=60):
+        """A slow server can take longer than the CDP call to answer. Keep waiting for the new document."""
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            try:
+                if self.evaluate("location.href") != before:
+                    return
+            except StalePage:
+                pass
+            time.sleep(0.1)
 
     def wait_for_load(self, seconds=15):
         deadline = time.monotonic() + seconds
@@ -202,7 +259,12 @@ def browser_operation(request):
         return cdp(method, session_id=session, **params)
 
     def evaluate(expression):
-        result = call("Runtime.evaluate", expression=expression, returnByValue=True)
+        try:
+            result = call("Runtime.evaluate", expression=expression, returnByValue=True)
+        except TimeoutError:
+            if operation == "act" and request["action"]["kind"] == "select":
+                raise RuntimeError("Dropdown execution timed out; inspect before retrying.") from None
+            raise StalePage("Page did not answer in time") from None
         if result.get("exceptionDetails"):
             if operation == "act" and request["action"]["kind"] == "select":
                 raise RuntimeError("Dropdown execution was interrupted; inspect before retrying.")
@@ -216,28 +278,57 @@ def browser_operation(request):
             call("Input.dispatchMouseEvent", type="mouseWheel", x=550, y=650, deltaX=0, deltaY=action["delta"])
         elif kind == "navigate":
             # The helper's URL was checked for an http(s) scheme and host before it got here.
-            call("Page.navigate", url=request["text"])
+            try:
+                call("Page.navigate", url=request["text"], _response_timeout=NAVIGATION_TIMEOUT)
+            except TimeoutError:
+                pass  # Chrome keeps loading; Browser.act waits for the new document.
+        elif kind == "enter":
+            for event in ("keyDown", "keyUp"):
+                call("Input.dispatchKeyEvent", type=event, key="Enter", code="Enter", windowsVirtualKeyCode=13,
+                     **({"text": "\r"} if event == "keyDown" else {}))
+        elif kind == "back":
+            entries = call("Page.getNavigationHistory")
+            if entries.get("currentIndex", 0) > 0:
+                entry = entries["entries"][entries["currentIndex"] - 1]["id"]
+                call("Page.navigateToHistoryEntry", entryId=entry, _response_timeout=NAVIGATION_TIMEOUT)
         elif kind != "wait":
             if type(action["node"]) is not int:
                 raise ValueError("Invalid observed node")
             # Code-owned node IDs refer to actual observed elements, never model-generated selectors.
+            # 'unavailable' means the checks failed before any input, so nothing changed on the page.
             target = evaluate("""(action => {
               const e=window.__eveFast?.nodes.get(action.node);
               if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]') ||
-                  !e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return null;
-              if (action.kind==='fill' && (e.readOnly || e.getAttribute('aria-readonly')==='true')) return null;
+                  !e.checkVisibility({checkOpacity:!(e.tagName==='INPUT' && ['checkbox','radio'].includes(e.type)),
+                    checkVisibilityCSS:true})) return 'unavailable';
+              if (action.kind==='fill' && (e.readOnly || e.getAttribute('aria-readonly')==='true'))
+                return 'unavailable';
               const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2;
-              if (!r.width || !r.height || x<0 || y<0 || x>=innerWidth || y>=innerHeight) return null;
-              if (!e.contains(document.elementFromPoint(x,y))) return null;
+              // A native select changes by value, not by pointer, so a styled overlay on top of it
+              // (Amazon's sort menu, for one) must not block it. Clicks and typing still need a clear target.
+              if (action.kind!=='select') {
+                if (!r.width || !r.height || x<0 || y<0 || x>=innerWidth || y>=innerHeight) return 'unavailable';
+                // A label drawn over its own checkbox is the same control.
+                const hit=document.elementFromPoint(x,y);
+                if (!e.contains(hit) && ![...(e.labels||[])].some(l=>l.contains(hit))) return 'unavailable';
+              }
               if (action.kind==='select') {
                 if (e.tagName!=='SELECT' || ![...e.options].some(o=>o.value===action.value &&
-                    !o.disabled && !o.closest('optgroup[disabled]'))) return null;
+                    !o.disabled && !o.closest('optgroup[disabled]'))) return 'unavailable';
                 e.value=action.value;
                 e.dispatchEvent(new Event('input',{bubbles:true}));
                 e.dispatchEvent(new Event('change',{bubbles:true}));
               }
+              if (action.kind==='click') {
+                // The agent watches one tab, so links and forms open there instead of in a new one.
+                for (const owner of [e.closest('a[target]'), e.closest('form[target]'), e.form]) {
+                  if (owner?.target && owner.target!=='_self') owner.target='_self';
+                }
+              }
               return {x,y};
             })(""" + json.dumps(action) + ")")
+            if target == "unavailable":
+                raise Unavailable("Target is covered, disabled or gone; nothing was executed.")
             if target is None:
                 if kind == "select":
                     raise RuntimeError("Dropdown execution was not confirmed; inspect before retrying.")

@@ -347,6 +347,7 @@ def runner():
     a = loop.Agent.__new__(loop.Agent)
     a.screenshots = False
     a.pending_text = None
+    a.unavailable = set()
     p = page()
     a.state = {
         "browser": Mock(fresh=Mock(return_value=True), observe=Mock(return_value=p)),
@@ -611,7 +612,9 @@ def test_browser_navigates_with_cdp_and_never_types(monkeypatch):
     monkeypatch.setattr(browser, "cdp", cdp)
     browser_operation({"operation": "act", "session": "s", "action": {"id": "NAVIGATE", "kind": "navigate"},
                        "text": "https://example.com/"})
-    assert cdp.call_args_list == [(("Page.navigate",), {"session_id": "s", "url": "https://example.com/"})]
+    assert cdp.call_args_list == [
+        (("Page.navigate",), {"session_id": "s", "url": "https://example.com/", "_response_timeout": 30})
+    ]
 
 
 BAD_START_URLS = [
@@ -643,3 +646,109 @@ def test_inspector_web_scenario_start_page(monkeypatch, url, start):
     demo.command("reset", {"scenario": "web", "goal": "Go", "url": url})
     assert demo.Agent.call_args.args[0] == start
     monkeypatch.setattr(demo, "AGENT", None)
+
+
+def test_refused_dropdown_is_unavailable_not_fatal(monkeypatch):
+    import eve_ultrafast.browser as browser
+
+    monkeypatch.setattr(browser, "cdp", Mock(return_value={"result": {"type": "string", "value": "unavailable"}}))
+    with pytest.raises(browser.Unavailable):
+        browser_operation({"operation": "act", "session": "s", "action": {
+            "id": "e1", "kind": "select", "node": 1, "value": "Design",
+        }})
+
+
+def test_refused_target_is_not_offered_again_on_that_page(runner, monkeypatch):
+    from eve_ultrafast.browser import Unavailable
+
+    runner.state["decision"] = decision("e3")
+    runner.state["browser"].act.side_effect = Unavailable("covered")
+    with pytest.raises(Unavailable):
+        runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    seen = []
+    monkeypatch.setattr(loop, "choose", lambda p, _g, _h: seen.append(p) or decision("e1"))
+    runner.state["status"] = "ready"
+    runner.command("predict", {})
+    assert "e3" not in {a["id"] for a in seen[0]["actions"]}
+    assert "e1" in {a["id"] for a in seen[0]["actions"]}
+
+
+def test_enter_is_offered_right_after_typing_and_back_after_leaving_a_page():
+    page_now = {"url": "https://a.com/results"}
+    assert set(model.synthetic_operations(page_now, [])) == {"NAVIGATE"}
+    typed = [{"kind": "fill", "action": "Search", "url": "https://a.com/results"}]
+    assert "PRESS_ENTER" in model.synthetic_operations(page_now, typed)
+    moved = [{"kind": "click", "action": "Next", "url": "https://a.com/"}, {"kind": "click", "url": "https://a.com/results"}]
+    operations = model.synthetic_operations(page_now, moved)
+    assert "GO_BACK" in operations and "PRESS_ENTER" not in operations
+
+
+@pytest.mark.parametrize("kind, calls", [
+    ("enter", ["Input.dispatchKeyEvent", "Input.dispatchKeyEvent"]),
+    ("back", ["Page.getNavigationHistory", "Page.navigateToHistoryEntry"]),
+])
+def test_enter_and_back_use_cdp_only(monkeypatch, kind, calls):
+    import eve_ultrafast.browser as browser
+
+    cdp = Mock(return_value={"currentIndex": 1, "entries": [{"id": 7}, {"id": 8}]})
+    monkeypatch.setattr(browser, "cdp", cdp)
+    browser_operation({"operation": "act", "session": "s", "action": {"id": kind, "kind": kind}})
+    assert [c.args[0] for c in cdp.call_args_list] == calls
+    if kind == "back":
+        assert cdp.call_args.kwargs["entryId"] == 7
+
+
+def test_done_reads_an_answer_off_the_final_page(runner, monkeypatch):
+    answer = ("Logitech G203, ₹1,495", {"model": "t", "latency_ms": 3})
+    monkeypatch.setattr(loop, "final_answer", Mock(return_value=answer))
+    runner.state["decision"] = {**decision("DONE"), "operation": "DONE", "target": None, "probabilities": {"DONE": 1.0}}
+    runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    assert runner.state["status"] == "done" and runner.state["answer"] == "Logitech G203, ₹1,495"
+    runner.state["browser"].act.assert_not_called()
+
+
+def test_a_missing_answer_does_not_fail_the_run(runner, monkeypatch):
+    monkeypatch.setattr(loop, "final_answer", Mock(return_value=(None, {"model": "t", "latency_ms": 3})))
+    runner.state["decision"] = {**decision("DONE"), "operation": "DONE", "target": None, "probabilities": {"DONE": 1.0}}
+    runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    assert runner.state["status"] == "done" and runner.state["answer"] is None
+
+
+
+def test_repeating_one_action_on_one_page_stops_with_an_answer(runner, monkeypatch):
+    monkeypatch.setattr(loop, "final_answer", Mock(return_value=("Saw the iPad page", {"model": "t", "latency_ms": 1})))
+    page_now = runner.state["page"]
+    for n in range(4):
+        page_now["text"] = f"changed {n}"  # each click changes the page, so only the repeat guard can stop it
+        runner.state["browser"].observe.return_value = {**page_now, "fingerprint": f"f{n}"}
+        runner.state["decision"] = decision("e3")
+        runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+        if runner.state["status"] == "blocked":
+            break
+    assert runner.state["status"] == "blocked" and len(runner.state["history"]) == 4
+    assert runner.state["stop_reason"] == "Repeating the same action on the same page"
+    assert runner.state["answer"] == "Saw the iPad page"
+
+
+def test_action_budget_ends_the_run_instead_of_raising(runner, monkeypatch):
+    monkeypatch.setattr(loop, "final_answer", Mock(return_value=(None, {"model": "t", "latency_ms": 1})))
+    runner.state["history"] = [{"kind": "click", "action": f"a{i}", "url": "u"} for i in range(loop.MAX_STEPS)]
+    runner.state["decision"] = decision("e3")
+    runner.command("act", {"fingerprint": runner.state["page"]["fingerprint"]})
+    assert runner.state["status"] == "blocked" and "budget" in runner.state["stop_reason"]
+    runner.state["browser"].act.assert_not_called()
+
+
+def test_visited_pages_list_earlier_urls_only():
+    history = [{"url": "https://a.com/mac"}, {"url": "https://a.com/ipad"}, {"url": "https://a.com/mac"}]
+    assert model.visited_pages("https://a.com/ipad", history) == "https://a.com/mac"
+    assert model.visited_pages("https://a.com/", []) == "none"
+
+
+def test_a_slow_site_does_not_end_the_run(monkeypatch):
+    import eve_ultrafast.browser as browser
+
+    monkeypatch.setattr(browser, "cdp", Mock(side_effect=TimeoutError("Page.navigate timed out")))
+    result = browser_operation({"operation": "act", "session": "s", "action": {"id": "NAVIGATE", "kind": "navigate"},
+                                "text": "https://slow.example/"})
+    assert result == {"executed": "NAVIGATE"}

@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from .questions import NEXT_ACTION, TARGET, TEXT_VALUE, URL_VALUE
+from .questions import ANSWER_VALUE, NEXT_ACTION, TARGET, TEXT_VALUE, URL_VALUE
 
 CLIENT = httpx.Client(http2=True, timeout=25)
 API_BASE = "https://inference.runanywhere.ai/v1"
@@ -161,9 +161,20 @@ def unsubmitted(history):
     for h in history:
         if h.get("kind") == "fill" and h.get("action") not in fields:
             fields.append(h["action"])
-        elif h.get("kind") == "navigate" or (h.get("kind") == "click" and h.get("role") in {"button", "link"}):
+        elif h.get("kind") in {"navigate", "enter", "back"} or (
+            h.get("kind") == "click" and h.get("role") in {"button", "link"}
+        ):
             fields = []
     return ", ".join(fields) or "none"
+
+
+def visited_pages(current, history):
+    """Earlier pages of this run, newest last, so goals that gather facts across pages know what they saw."""
+    urls = []
+    for h in history:
+        if h.get("url") and h["url"] != current and h["url"] not in urls:
+            urls.append(h["url"])
+    return "\n".join(urls[-8:]) or "none"
 
 
 def chunks(ids):
@@ -247,6 +258,25 @@ def pick_target(url, body, result, operation, candidates):
     return answer, later
 
 
+# Operations the agent performs without a page element. The executor owns what each one does.
+SYNTHETIC = {
+    "NAVIGATE": {"id": "NAVIGATE", "kind": "navigate", "label": "Open a web address"},
+    "PRESS_ENTER": {"id": "PRESS_ENTER", "kind": "enter", "label": "Press Enter"},
+    "GO_BACK": {"id": "GO_BACK", "kind": "back", "label": "Go back"},
+}
+
+
+def synthetic_operations(state, history):
+    operations = {}
+    last = history[-1] if history else {}
+    if last.get("kind") == "fill" and last.get("url") == state["url"]:
+        operations["PRESS_ENTER"] = f"Press Enter in the field just typed into ({last.get('action')}) to submit it."
+    if any(h.get("url") not in (None, state["url"]) for h in history):
+        operations["GO_BACK"] = "Return to the previous page."
+    operations["NAVIGATE"] = "Open a different website by its address. A small LLM will write the URL from the goal."
+    return operations
+
+
 def choose(state, goal, history):
     elements, targets, controls = action_space(state["actions"])
     labels = {
@@ -256,8 +286,8 @@ def choose(state, goal, history):
     }
     operations = {key: labels[key] for key in targets}
     operations.update({key: value["label"] for key, value in controls.items()})
+    operations.update(synthetic_operations(state, history))
     operations.update(
-        NAVIGATE="Open a different website by its address. A small LLM will write the URL from the goal.",
         DONE="Every requirement is visibly satisfied.",
         BLOCKED="No supported operation can progress.",
     )
@@ -273,6 +303,7 @@ def choose(state, goal, history):
             "elements": element_table(elements),
             "recent_actions": history_text(history[-10:]),
             "typed_not_yet_submitted": unsubmitted(history),
+            "visited_pages": visited_pages(state["url"], history),
         },
         "questions": questions,
     }
@@ -381,6 +412,19 @@ def field_text(context):
     if value is None:
         raise ValueError("Text helper returned no valid field value; nothing typed.")
     return value, meta
+
+
+def final_answer(goal, page, history, earlier=()):
+    """What the user asked for, read off the final page and short excerpts of pages visited before it.
+
+    Returns (answer or None, metadata)."""
+    context = {
+        "goal": goal,
+        "page": {"url": page["url"], "title": page["title"], "text": page["text"][:16000]},
+        "earlier_pages": [{"url": url, "text": text[:2500]} for url, text in earlier][-4:],
+        "recent_actions": [{k: h.get(k) for k in ("action", "text")} for h in history[-8:]],
+    }
+    return helper(ANSWER_VALUE, context, "answer")
 
 
 def page_url(context):

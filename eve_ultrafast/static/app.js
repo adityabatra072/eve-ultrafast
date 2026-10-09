@@ -9,7 +9,7 @@ const goals = {
     'Use the destination search and filters to find Design stays in Lisbon with Free cancellation, then open Casa Flora.',
   research:
     "Open the article about using finite choices to control browser agents.",
-  web: "Go to Hacker News and open the comments of the top story.",
+  web: "Go to Amazon India and find me the best mouse under 5000 rupees.",
 };
 const escape = (value) =>
   String(value ?? "").replace(
@@ -72,6 +72,8 @@ async function perform(fn, label) {
 function render() {
   if (!state) return;
   $("helper").textContent = `Text helper · ${state.text_model}`;
+  $("answer").hidden = !state.answer;
+  $("answer-text").textContent = state.answer || "";
   $("plan").innerHTML = (state.plan || [])
     .map(
       (goal, i) =>
@@ -89,7 +91,10 @@ function render() {
     done: "EVE reports complete · inspect the page",
     blocked: "Stopped · no supported next action",
   };
-  $("status").textContent = labels[state.status] || state.status;
+  $("status").textContent =
+    state.status === "blocked" && state.stop_reason
+      ? `Stopped · ${state.stop_reason}`
+      : labels[state.status] || state.status;
   if (!page) {
     controls();
     return;

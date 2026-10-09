@@ -113,6 +113,19 @@ def main():
         assert browser.evaluate("document.querySelector('#category').value") == "Design"
         passed.append("native dropdown selects an observed option")
 
+        # Styled dropdowns put a nearly transparent native select under a decorative label.
+        browser.evaluate("""(() => {
+          const s=document.querySelector('#category'); s.value='All'; s.style.opacity='0.01';
+          const r=s.getBoundingClientRect(), cover=document.createElement('span');
+          cover.textContent='Sort'; Object.assign(cover.style,{position:'fixed',left:r.x+'px',top:r.y+'px',
+            width:r.width+'px',height:r.height+'px',background:'white',pointerEvents:'none'});
+          document.body.append(cover); return 1})()""")
+        page = browser.observe(screenshot=False)
+        select = next(a for a in page["actions"] if a["kind"] == "select")
+        browser.act(select, page)
+        assert browser.evaluate("document.querySelector('#category').value") == "Design"
+        passed.append("a styled overlay does not block a native dropdown")
+
         browser.evaluate("document.querySelector('#query').addEventListener('input',()=>setTimeout(()=>{"
                          "document.querySelector('#suggestions').innerHTML='<div role=option>Generated</div>'"
                          "},60))")

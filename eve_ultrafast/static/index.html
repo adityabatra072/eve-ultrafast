@@ -31,17 +31,17 @@
         <div class="task-label">
           <label for="goal">Give it a task</label
           ><select id="scenario" name="scenario" aria-label="Demo scenario">
+            <option value="web">Any website · real web</option>
             <option value="flights">Google Flights · real web</option>
             <option value="travel">Travel planner · fixture</option>
             <option value="research">Reading room · fixture</option>
-            <option value="web">Any website · real web</option>
           </select>
         </div>
         <input id="start-url" name="url" type="text" inputmode="url" autocomplete="off" spellcheck="false"
-          placeholder="Start URL (optional). Leave empty and EVE opens the site itself." hidden />
+          placeholder="Start URL (optional). Leave empty and EVE opens the site itself." />
         <div class="task-row">
           <textarea id="goal" name="goal" rows="5">
-Find one-way flights from Zurich to London on November 20, 2026, for one adult in economy. Stop when matching flight options are visible. Do not select or book a flight.</textarea
+Go to Amazon India and find me the best mouse under 5000 rupees.</textarea
           ><button type="submit" id="start" class="primary">
             Start demo <span>↗</span>
           </button>
@@ -63,6 +63,7 @@ Find one-way flights from Zurich to London on November 20, 2026, for one adult i
         </div>
       </div>
       <div id="error" role="alert" hidden></div>
+      <div id="answer" role="status" hidden><span>Answer</span><p id="answer-text"></p></div>
       <section class="workspace">
         <div class="browser-panel">
           <div class="browser-bar">

@@ -5,8 +5,18 @@ import threading
 import time
 from pathlib import Path
 
-from .browser import Browser, StalePage
-from .model import action_space, choose, field_context, field_text, navigate_context, page_url, warm
+from .browser import Browser, StalePage, Unavailable
+from .model import (
+    SYNTHETIC,
+    action_space,
+    choose,
+    field_context,
+    field_text,
+    final_answer,
+    navigate_context,
+    page_url,
+    warm,
+)
 from .questions import MAX_STEPS
 
 
@@ -18,6 +28,8 @@ class Agent:
             raise ValueError("Supply a task")
         plan = [task]
         self.pending_text = None
+        # (url, action id) pairs the executor refused; EVE is not offered them again on that page.
+        self.unavailable = set()
         warming = threading.Thread(target=warm, daemon=True)
         warming.start()
         self.browser = Browser(url or "about:blank")
@@ -40,6 +52,8 @@ class Agent:
             plan_index=0,
             decisions=[],
             text_calls=[],
+            answer=None,
+            stop_reason=None,
             elapsed_ms=0,
             started_at=None,
             record=bool(self.record_dir),
@@ -79,7 +93,9 @@ class Agent:
                 raise ValueError("This run has stopped. Start a fresh demo.")
             if len(state["decisions"]) >= MAX_STEPS * 2:
                 raise ValueError("Reached the demo's model-call budget")
-            state["decision"] = choose(state["page"], state["goal"], state["history"])
+            page = state["page"]
+            usable = [a for a in page["actions"] if (page["url"], a.get("id")) not in self.unavailable]
+            state["decision"] = choose({**page, "actions": usable}, state["goal"], state["history"])
             state["decisions"].append(
                 {
                     **state["decision"],
@@ -99,17 +115,13 @@ class Agent:
                 if not state["browser"].fresh(page):
                     state["status"] = "ready"
                     raise StalePage("Page changed since the decision. Choose again.")
-                state["status"] = "done" if selected == "DONE" else "blocked"
-                state["plan_index"] = int(selected == "DONE")
-                state["elapsed_ms"] = round((time.perf_counter() - state["started_at"]) * 1000)
-                return self.snapshot()
-            if selected == "NAVIGATE":
-                action = {"id": "NAVIGATE", "kind": "navigate", "label": "Open a web address"}
+                return self.finish("done" if selected == "DONE" else "blocked", page)
+            if selected in SYNTHETIC:
+                action = SYNTHETIC[selected]
             else:
                 action = next(a for a in page["actions"] if a["id"] == selected)
             if len(state["history"]) >= MAX_STEPS:
-                state["status"] = "blocked"
-                raise ValueError(f"Stopped at the {MAX_STEPS}-action demo budget")
+                return self.finish("blocked", page, f"Stopped at the {MAX_STEPS}-action budget")
             text, helper = None, None
             if action["kind"] in {"fill", "navigate"}:
                 if not state["browser"].fresh(page):
@@ -125,7 +137,11 @@ class Agent:
                     self.pending_text = (context, text, helper)
                     state["text_calls"].append({**helper, "field": action["label"], "value": text})
             # Browser.act checks freshness immediately before input, including after text generation.
-            state["browser"].act(action, page, text=text)
+            try:
+                state["browser"].act(action, page, text=text)
+            except Unavailable:
+                self.unavailable.add((page["url"], selected))
+                raise
             self.pending_text = None
             state["elapsed_ms"] = round((time.perf_counter() - state["started_at"]) * 1000)
             # Record execution before observing. A stale post-action observation must not erase the action.
@@ -163,13 +179,43 @@ class Agent:
                     base64.b64decode(state["page"]["screenshot"])
                 )
             repeated = state["history"][-3:]
-            state["status"] = (
-                "blocked"
-                if len(repeated) == 3 and all(h["page_changed"] is False and h["kind"] != "wait" for h in repeated)
-                else "ready"
-            )
+            last = state["history"][-1]
+            key = (last["kind"], last["action"], last["url"])
+            same = [h for h in state["history"] if (h["kind"], h["action"], h["url"]) == key]
+            if len(repeated) == 3 and all(h["page_changed"] is False and h["kind"] != "wait" for h in repeated):
+                return self.finish("blocked", state["page"], "Three actions in a row changed nothing")
+            if last["kind"] not in {"wait", "scroll"} and len(same) >= 4:
+                return self.finish("blocked", state["page"], "Repeating the same action on the same page")
+            state["status"] = "ready"
         else:
             raise ValueError("Unknown command")
+        return self.snapshot()
+
+    def finish(self, status, page, reason=None):
+        """End the run. Done or not, the text helper answers from what the pages showed."""
+        state = self.state
+        try:
+            # The answer reads the whole document, not only the part on screen.
+            full = state["browser"].evaluate("document.body?.innerText || ''") or page["text"]
+        except StalePage:
+            full = page["text"]
+        # Pages seen on the way, one visible-text excerpt per URL, for answers that compare.
+        earlier = {}
+        for seen in state["decisions"]:
+            visited = seen["request"]["state"]["page"]
+            if visited["url"] != page["url"]:
+                earlier[visited["url"]] = visited["text"]
+        try:
+            final = {**page, "text": full}
+            answer, helper = final_answer(state["goal"], final, state["history"], list(earlier.items()))
+            state["text_calls"].append({**helper, "field": "Answer", "value": answer})
+        except (ValueError, RuntimeError):
+            answer = None
+        state["answer"] = answer
+        state["stop_reason"] = reason
+        state["status"] = status
+        state["plan_index"] = int(status == "done")
+        state["elapsed_ms"] = round((time.perf_counter() - state["started_at"]) * 1000)
         return self.snapshot()
 
     def run(self):
